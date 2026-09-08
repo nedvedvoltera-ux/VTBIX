@@ -1,0 +1,16 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      DATA_DIR: /app/data
+      LLM_API_URL: ${LLM_API_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    volumes:
+      - vtbih-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  vtbih-data:
