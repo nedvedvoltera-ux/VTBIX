@@ -1,4 +1,5 @@
 import { COUNTRIES, INDUSTRIES, REGIONS_BY_COUNTRY } from '../data/mock'
+import { CONCESSION_TERM_ITEMS } from '../data/ksTerms'
 import { REGION_RATINGS } from '../data/regions'
 import type { AnalyticalNote, ConcessionFit, Project, ProjectStatus, Recommendation } from '../types'
 import { clampScore } from '../utils/concession'
@@ -33,6 +34,9 @@ export const EMPTY_NOTE: AnalyticalNote = {
   scenarios: [{ name: '', npv: '', irr: '' }],
   risks: [{ title: '', level: 'mid', text: '' }],
   recommendation: '',
+  riskBalance: { exceptions: '', statement: '' },
+  terms: CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' })),
+  assessment: { imperativeLaw: '', executionRealism: '', investorFinance: '' },
 }
 
 function regionOptions(country: string, current: string) {
@@ -375,6 +379,73 @@ export function NoteFields({
           Добавить риск
         </button>
       </div>
+
+      <label className="field">
+        Баланс рисков — за исключением условий о
+        <input
+          value={note.riskBalance?.exceptions ?? ''}
+          onChange={(e) =>
+            patch('riskBalance', {
+              exceptions: e.target.value,
+              statement: `Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о ${e.target.value}.`,
+            })
+          }
+        />
+      </label>
+      <label className="field">
+        Формулировка баланса рисков
+        <textarea rows={3} value={note.riskBalance?.statement ?? ''} onChange={(e) => patch('riskBalance', { exceptions: note.riskBalance?.exceptions ?? '', statement: e.target.value })} />
+      </label>
+
+      <div className="field">
+        Основные условия проекта КС
+        {(note.terms?.length ? note.terms : CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))).map(
+          (row, index) => (
+            <div className="inline-add" key={`term-${row.label}-${index}`}>
+              <input value={row.label} readOnly />
+              <textarea
+                rows={2}
+                placeholder="Условие из соглашения"
+                value={row.value}
+                onChange={(e) => {
+                  const list = note.terms?.length
+                    ? note.terms
+                    : CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))
+                  patch(
+                    'terms',
+                    list.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)),
+                  )
+                }}
+              />
+            </div>
+          ),
+        )}
+      </div>
+
+      <label className="field">
+        Соответствие императивным нормам закона
+        <textarea
+          rows={3}
+          value={note.assessment?.imperativeLaw ?? ''}
+          onChange={(e) => patch('assessment', { ...(note.assessment ?? { imperativeLaw: '', executionRealism: '', investorFinance: '' }), imperativeLaw: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        Реалистичность исполнения (ПД, ЗУ)
+        <textarea
+          rows={3}
+          value={note.assessment?.executionRealism ?? ''}
+          onChange={(e) => patch('assessment', { ...(note.assessment ?? { imperativeLaw: '', executionRealism: '', investorFinance: '' }), executionRealism: e.target.value })}
+        />
+      </label>
+      <label className="field">
+        Финансовая целесообразность для инвестора
+        <textarea
+          rows={3}
+          value={note.assessment?.investorFinance ?? ''}
+          onChange={(e) => patch('assessment', { ...(note.assessment ?? { imperativeLaw: '', executionRealism: '', investorFinance: '' }), investorFinance: e.target.value })}
+        />
+      </label>
 
       <label className="field">
         Рекомендация в записке

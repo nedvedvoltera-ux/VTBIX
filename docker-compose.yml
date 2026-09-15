@@ -3,7 +3,7 @@ name: vtbih
 services:
   api:
     build: .
-    image: vtbih-api:1.1.3
+    image: vtbih-api:1.1.5
     ports:
       - "8080:8080"
     environment:

@@ -22,10 +22,10 @@ import {
   updateJob,
 } from './db.js'
 import { pingDocling } from './docling.js'
+import { combineDocumentsMarkdown, decodeOriginalName, readDocumentMarkdown, summarizeDocuments } from './documents.js'
 import { closeJobStream, emitJob, subscribeJob } from './events.js'
-import { completeProcessing } from './llm.js'
+import { mergeProjectProgress, runConvertDocuments, runExtractDocuments } from './pipeline.js'
 import { getLastLlmProbe, pingLlm, probeLlm } from './qwen.js'
-import { abortPipeline, mergeProjectProgress, runDocumentPipeline, runningPipelines } from './pipeline.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = config.port
@@ -50,93 +50,155 @@ const upload = multer({
   storage,
   limits: { fileSize: 40 * 1024 * 1024 },
   fileFilter(_req, file, cb) {
-    const ok = /\.(xlsx|xls|xlsm|pdf|docx|doc|csv)$/i.test(file.originalname)
-    cb(ok ? null : new Error('Нужен файл модели или ТЭО: xlsx, pdf, docx, csv.'), ok)
+    const ok = /\.(xlsx|xls|xlsm|pdf|docx|doc|csv|md|txt)$/i.test(file.originalname)
+    cb(ok ? null : new Error('Нужен файл модели или ТЭО: xlsx, pdf, docx, csv, md.'), ok)
   },
 })
 
-function startPipelineJob({ jobId, project, filePath, fileName, notes, prompt }) {
-  abortPipeline(project.id)
-  void (async () => {
-    let latest = getProject(project.id) || project
-    try {
-      await runDocumentPipeline({
-        project: latest,
-        filePath,
-        fileName,
-        notes,
-        prompt,
-        onProgress: async (payload) => {
-          latest = getProject(project.id) || latest
-          const next = saveProject(mergeProjectProgress(latest, payload))
-          updateJob(jobId, {
-            status: payload.stage === 'done' ? 'done' : 'running',
-            stage: payload.stage,
-            markdown_path: payload.markdownPath || undefined,
-            extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : undefined,
-          })
-          emitJob(jobId, 'progress', {
-            stage: payload.stage,
-            progress: next.progress,
-            message: payload.message,
-            project: next,
-          })
-          if (payload.stage === 'done') {
-            fs.writeFileSync(
-              `${filePath}.llm.json`,
-              JSON.stringify({ extracted: payload.extracted, jobId, markdownPath: payload.markdownPath }, null, 2),
-              'utf8',
-            )
+function withJobPaths(project) {
+  const jobs = listJobs(project.id)
+  let documents = Array.isArray(project.documents) ? [...project.documents] : []
+  documents = documents.map((doc) => {
+    if (doc.filePath && fs.existsSync(doc.filePath)) {
+      const mdPath = doc.markdownPath || `${doc.filePath}.md`
+      return {
+        ...doc,
+        markdownPath: fs.existsSync(mdPath) ? mdPath : doc.markdownPath,
+        markdownReady: doc.markdownReady || fs.existsSync(mdPath),
+      }
+    }
+    const match =
+      jobs.find((job) => job.filePath && fs.existsSync(job.filePath) && job.fileName === doc.fileName) ||
+      jobs.find((job) => job.markdownPath && fs.existsSync(job.markdownPath) && job.fileName === doc.fileName)
+    if (!match) return doc
+    return {
+      ...doc,
+      filePath: doc.filePath || match.filePath,
+      markdownPath: doc.markdownPath || match.markdownPath,
+      markdownReady: doc.markdownReady || Boolean(match.markdownPath && fs.existsSync(match.markdownPath)),
+    }
+  })
+  if (!documents.length) {
+    const seen = new Set()
+    for (const job of jobs) {
+      if (!job.filePath || seen.has(job.filePath) || !fs.existsSync(job.filePath)) continue
+      seen.add(job.filePath)
+      const mdPath = job.markdownPath && fs.existsSync(job.markdownPath) ? job.markdownPath : `${job.filePath}.md`
+      documents.push({
+        id: uid('doc'),
+        fileName: job.fileName || path.basename(job.filePath),
+        fileSize: job.fileSize || 0,
+        filePath: job.filePath,
+        markdownPath: fs.existsSync(mdPath) ? mdPath : job.markdownPath,
+        markdownReady: fs.existsSync(mdPath),
+        status: fs.existsSync(mdPath) ? 'ready' : 'converting',
+      })
+    }
+  }
+  return { ...project, documents, ...summarizeDocuments(documents) }
+}
+
+const jobChain = new Map()
+
+function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
+  const prev = jobChain.get(project.id) || Promise.resolve()
+  const run = prev.catch(() => {}).then(
+    () =>
+      new Promise((resolve) => {
+        void (async () => {
+          let latest = getProject(project.id) || project
+          try {
+            const onProgress = async (payload) => {
+              latest = getProject(project.id) || latest
+              const next = saveProject(mergeProjectProgress(latest, payload, getPrompt()))
+              latest = next
+              updateJob(jobId, {
+                status: payload.stage === 'done' ? 'done' : 'running',
+                stage: payload.stage,
+                markdown_path: payload.document?.markdownPath || payload.markdownPath || undefined,
+                extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : undefined,
+              })
+              emitJob(jobId, 'progress', {
+                stage: payload.stage,
+                progress: next.progress,
+                message: payload.message,
+                project: next,
+              })
+              if (payload.stage === 'done') {
+                finishJob(jobId, {
+                  status: 'done',
+                  extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : null,
+                  response_json: JSON.stringify({
+                    provider: payload.extract === false ? 'docling' : config.llmApiUrl ? 'qwen' : 'heuristic',
+                    model: config.llmModel,
+                    mode,
+                    files: (next.documents || []).map((item) => item.fileName),
+                  }),
+                  error: null,
+                  finished_at: nowIso(),
+                })
+                emitJob(jobId, 'done', { project: next, extracted: payload.extracted || null })
+                closeJobStream(jobId)
+              }
+            }
+
+            if (mode === 'convert') {
+              await runConvertDocuments({ project: latest, documents, onProgress })
+            } else {
+              await runExtractDocuments({
+                project: withJobPaths(latest),
+                notes,
+                prompt,
+                onProgress,
+              })
+            }
+          } catch (error) {
+            const current = getProject(project.id) || latest
+            const failedAt =
+              error?.failedAt ||
+              (current.markdownReady || current.markdownPreview ? 'extracting' : 'converting')
+            const markdownPreview = error?.markdownPreview || current.markdownPreview
+            const message = error instanceof Error ? error.message : String(error)
+            console.error(`[job ${jobId}] ${message}`)
+            let documentsNext = current.documents || []
+            if (error?.documentId) {
+              documentsNext = documentsNext.map((item) =>
+                item.id === error.documentId ? { ...item, status: 'error', error: message } : item,
+              )
+            }
+            const failed = saveProject({
+              ...current,
+              documents: documentsNext,
+              ...summarizeDocuments(documentsNext),
+              status: 'error',
+              pipelineStage: 'error',
+              pipelineFailedAt: failedAt,
+              pipelineMessage: message,
+              markdownPreview,
+              markdownReady: Boolean(markdownPreview || summarizeDocuments(documentsNext).markdownReady),
+              markdownChars: error?.markdownChars || current.markdownChars,
+              updatedAt: nowIso(),
+            })
             finishJob(jobId, {
-              status: 'done',
-              extracted_json: JSON.stringify(payload.extracted ?? {}),
+              status: 'error',
+              extracted_json: null,
               response_json: JSON.stringify({
-                provider: config.llmApiUrl ? 'qwen' : 'heuristic',
-                model: config.llmModel,
-                markdownPath: payload.markdownPath,
+                failedAt,
+                markdownPath: error?.markdownPath || (current.markdownPreview ? 'saved' : null),
               }),
-              error: null,
+              error: message,
               finished_at: nowIso(),
             })
-            emitJob(jobId, 'done', { project: next, extracted: payload.extracted })
+            updateJob(jobId, { stage: 'error', markdown_path: error?.markdownPath || undefined })
+            emitJob(jobId, 'failed', { message, project: failed, failedAt })
             closeJobStream(jobId)
+          } finally {
+            resolve()
           }
-        },
-      })
-    } catch (error) {
-      const current = getProject(project.id) || latest
-      const failedAt =
-        error?.failedAt ||
-        (current.markdownReady || current.markdownPreview ? 'extracting' : 'converting')
-      const markdownPreview = error?.markdownPreview || current.markdownPreview
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`[job ${jobId}] ${message}`)
-      const failed = saveProject({
-        ...current,
-        status: 'error',
-        pipelineStage: 'error',
-        pipelineFailedAt: failedAt,
-        pipelineMessage: message,
-        markdownPreview,
-        markdownReady: Boolean(markdownPreview),
-        markdownChars: error?.markdownChars || current.markdownChars,
-        updatedAt: nowIso(),
-      })
-      finishJob(jobId, {
-        status: 'error',
-        extracted_json: null,
-        response_json: JSON.stringify({
-          failedAt,
-          markdownPath: error?.markdownPath || (current.markdownPreview ? 'saved' : null),
-        }),
-        error: message,
-        finished_at: nowIso(),
-      })
-      updateJob(jobId, { stage: 'error', markdown_path: error?.markdownPath || undefined })
-      emitJob(jobId, 'failed', { message, project: failed, failedAt })
-      closeJobStream(jobId)
-    }
-  })()
+        })()
+      }),
+  )
+  jobChain.set(project.id, run)
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -193,18 +255,20 @@ app.post('/api/projects', (req, res) => {
 })
 
 app.post('/api/projects/:id/file', (req, res) => {
-  upload.single('file')(req, res, (err) => {
+  upload.any()(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message })
-    if (!req.file) return res.status(400).json({ error: 'file_required' })
+    const files = (req.files || []).filter((item) => item.fieldname === 'file' || item.fieldname === 'files')
+    if (!files.length) return res.status(400).json({ error: 'file_required' })
 
     let project = getProject(req.params.id)
+    const now = nowIso()
     if (!project) {
-      const now = nowIso()
       project = saveProject({
         id: req.params.id,
         name: '',
-        fileName: req.file.originalname,
-        fileSize: req.file.size,
+        fileName: null,
+        fileSize: null,
+        documents: [],
         notes: req.body.notes || '',
         industry: '',
         country: '',
@@ -220,58 +284,71 @@ app.post('/api/projects/:id/file', (req, res) => {
     }
 
     const notes = req.body.notes || project.notes || ''
+    const incoming = files.map((file) => ({
+      id: uid('doc'),
+      fileName: decodeOriginalName(file.originalname),
+      fileSize: file.size,
+      filePath: file.path,
+      status: 'converting',
+      markdownReady: false,
+      uploadedAt: now,
+    }))
+    const documents = [...(project.documents || []), ...incoming]
     const prompt = getPrompt()
     const jobId = uid('job')
     const next = saveProject({
       ...project,
-      fileName: req.file.originalname,
-      fileSize: req.file.size,
+      documents,
+      ...summarizeDocuments(documents),
       notes,
       status: 'processing',
       progress: 5,
       pipelineStage: 'converting',
-      pipelineMessage: 'Файл принят. Docling готовит Markdown…',
-      updatedAt: nowIso(),
+      pipelineMessage:
+        incoming.length > 1
+          ? `Принято ${incoming.length} файла. Docling готовит Markdown…`
+          : 'Файл принят. Docling готовит Markdown…',
+      updatedAt: now,
     })
 
     insertJob({
       id: jobId,
       project_id: next.id,
       status: 'running',
-      file_name: req.file.originalname,
-      file_path: req.file.path,
-      file_size: req.file.size,
+      file_name: incoming.map((item) => item.fileName).join(', '),
+      file_path: incoming[0].filePath,
+      file_size: incoming.reduce((sum, item) => sum + item.fileSize, 0),
       notes,
       prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
       extracted_json: null,
       response_json: null,
       error: null,
-      created_at: nowIso(),
+      created_at: now,
       finished_at: null,
     })
     updateJob(jobId, { stage: 'converting' })
-
     startPipelineJob({
       jobId,
       project: next,
-      filePath: req.file.path,
-      fileName: req.file.originalname,
+      mode: 'convert',
+      documents: incoming,
       notes,
       prompt,
     })
-
     res.json({ project: next, job: getJob(jobId) })
   })
 })
 
 app.post('/api/projects/:id/analyze', (req, res) => {
-  const project = getProject(req.params.id)
-  if (!project) return res.status(404).json({ error: 'not_found' })
-  const jobs = listJobs(project.id)
-  const source = jobs.find((item) => item.filePath && fs.existsSync(item.filePath))
-  if (!source) return res.status(400).json({ error: 'file_required', message: 'Сначала загрузите файл проекта.' })
+  const existing = getProject(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'not_found' })
+  const project = withJobPaths(existing)
+  const ready = (project.documents || []).filter((item) => item.filePath || item.markdownReady || item.markdownPreview)
+  if (!ready.length) {
+    return res.status(400).json({ error: 'file_required', message: 'Сначала загрузите файлы проекта.' })
+  }
 
-  const notes = req.body?.notes || project.notes || source.notes || ''
+  const notes = req.body?.notes || project.notes || ''
   const prompt = getPrompt()
   const jobId = uid('job')
   const next = saveProject({
@@ -279,17 +356,17 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     notes,
     status: 'processing',
     progress: 5,
-    pipelineStage: 'converting',
-    pipelineMessage: 'Повторный разбор: Docling → Qwen…',
+    pipelineStage: 'extracting',
+    pipelineMessage: `Отправляю ${ready.length} Markdown в Qwen…`,
     updatedAt: nowIso(),
   })
   insertJob({
     id: jobId,
     project_id: next.id,
     status: 'running',
-    file_name: source.fileName,
-    file_path: source.filePath,
-    file_size: source.fileSize,
+    file_name: ready.map((item) => item.fileName).join(', '),
+    file_path: ready[0].filePath || null,
+    file_size: ready.reduce((sum, item) => sum + (item.fileSize || 0), 0),
     notes,
     prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
     extracted_json: null,
@@ -298,12 +375,11 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     created_at: nowIso(),
     finished_at: null,
   })
-  updateJob(jobId, { stage: 'converting' })
+  updateJob(jobId, { stage: 'extracting' })
   startPipelineJob({
     jobId,
     project: next,
-    filePath: source.filePath,
-    fileName: source.fileName,
+    mode: 'extract',
     notes,
     prompt,
   })
@@ -311,15 +387,14 @@ app.post('/api/projects/:id/analyze', (req, res) => {
 })
 
 app.get('/api/projects/:id/markdown', (req, res) => {
-  const jobs = listJobs(req.params.id)
-  const withMd = jobs.find((item) => item.markdownPath && fs.existsSync(item.markdownPath))
-  if (withMd) {
+  const project = withJobPaths(getProject(req.params.id) || {})
+  const combined = combineDocumentsMarkdown(project.documents || [])
+  if (combined.trim()) {
     res.type('text/markdown; charset=utf-8')
-    res.send(fs.readFileSync(withMd.markdownPath, 'utf8'))
+    res.send(combined)
     return
   }
-  const project = getProject(req.params.id)
-  if (project?.markdownPreview) {
+  if (project.markdownPreview) {
     res.type('text/markdown; charset=utf-8')
     res.send(project.markdownPreview)
     return
@@ -328,6 +403,31 @@ app.get('/api/projects/:id/markdown', (req, res) => {
     error: 'markdown_not_ready',
     message: 'Markdown не создан — ошибка случилась на этапе Docling, до модели.',
   })
+})
+
+app.get('/api/projects/:id/documents/:docId/markdown', (req, res) => {
+  const project = withJobPaths(getProject(req.params.id) || {})
+  const doc = (project.documents || []).find((item) => item.id === req.params.docId)
+  if (!doc) return res.status(404).json({ error: 'not_found' })
+  const body = readDocumentMarkdown(doc)
+  if (!body.trim()) {
+    return res.status(404).json({ error: 'markdown_not_ready', message: 'У этого файла ещё нет Markdown.' })
+  }
+  res.type('text/markdown; charset=utf-8')
+  res.send(body)
+})
+
+app.delete('/api/projects/:id/documents/:docId', (req, res) => {
+  const project = getProject(req.params.id)
+  if (!project) return res.status(404).json({ error: 'not_found' })
+  const documents = (project.documents || []).filter((item) => item.id !== req.params.docId)
+  const next = saveProject({
+    ...project,
+    documents,
+    ...summarizeDocuments(documents),
+    updatedAt: nowIso(),
+  })
+  res.json(next)
 })
 
 app.get('/api/projects/:id/jobs', (req, res) => {
@@ -381,21 +481,6 @@ if (fs.existsSync(distDir)) {
     res.sendFile(path.join(distDir, 'index.html'))
   })
 }
-
-setInterval(() => {
-  for (const project of listProjects()) {
-    if (project.status !== 'processing') continue
-    if (runningPipelines.has(project.id) || project.pipelineStage === 'converting' || project.pipelineStage === 'extracting') {
-      continue
-    }
-    const nextProgress = Math.min(100, (project.progress || 0) + Math.round(6 + Math.random() * 10))
-    if (nextProgress >= 100) {
-      saveProject(completeProcessing(project, getPrompt()))
-    } else {
-      saveProject({ ...project, progress: nextProgress, updatedAt: nowIso() })
-    }
-  }
-}, 2000)
 
 app.listen(PORT, () => {
   console.log(`VTBIH API http://localhost:${PORT}`)

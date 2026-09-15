@@ -1,3 +1,5 @@
+import { buildMasterInstructions, CONCESSION_TERM_ITEMS } from './promptMaster.js'
+
 function metricList(prompt) {
   const raw = Array.isArray(prompt?.metrics) ? prompt.metrics : []
   return raw
@@ -7,35 +9,7 @@ function metricList(prompt) {
 
 export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
   const metrics = metricList(prompt)
-  const metricLine = metrics.length
-    ? metrics.map((item) => `${item.name} (вес ${item.weight})`).join(', ')
-    : 'NPV, IRR, DPP, WACC, EBITDA margin, DSCR'
   const metricNames = metrics.length ? metrics.map((item) => item.name) : ['NPV', 'IRR', 'DPP']
-  const lang = prompt?.language === 'en' ? 'English' : 'русском'
-  const notesRule = prompt?.useEmployeeNotes
-    ? 'Пояснения сотрудника имеют приоритет над гипотезами из файла. Расхождения пометь в comment.'
-    : 'Пояснения сотрудника — только справочный контекст.'
-  const recRule =
-    prompt?.recommendationStyle === 'narrative'
-      ? 'recommendation: связный вердикт без светофора, но поле recommendation всё равно одно из invest/revise/reject.'
-      : 'recommendation: строго invest, revise или reject.'
-
-  const systemPrompt = [
-    prompt?.role || 'Старший финансовый аналитик инвестиционного комитета.',
-    `Отвечай на ${lang} языке.`,
-    'Тебе дают Markdown документа (часто с сложными таблицами после Docling). Извлеки параметры концессионного проекта.',
-    'Верни ТОЛЬКО JSON без markdown-ограждений и без комментариев вне JSON.',
-    notesRule,
-    recRule,
-    `Обязательные метрики: ${metricLine}.`,
-    'Для каждой метрики: value как в документе (с единицами), comment кратко, score — балл привлекательности для концессионера 0–100.',
-    'Если метрики нет в документе: value = «недостаточно данных», score не ставь, ничего не выдумывай.',
-    'budget — число в рублях (не строка). Если в млрд — умножь на 1e9.',
-    'Не выдумывай цифры, которых нет в Markdown.',
-    prompt?.extraInstructions ? `Особые указания: ${prompt.extraInstructions}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
 
   const schema = {
     name: 'string',
@@ -60,24 +34,69 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
       scenarios: [{ name: 'Базовый', npv: 'string', irr: 'string' }],
       risks: [{ title: 'string', level: 'low | mid | high', text: 'string' }],
       recommendation: 'string',
+      riskBalance: {
+        exceptions: 'условия, по которым баланс рисков нарушен',
+        statement: 'Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …',
+      },
+      terms: CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: 'string' })),
+      assessment: {
+        imperativeLaw: 'соответствие императивным нормам закона',
+        executionRealism: 'реалистичность исполнения, в т.ч. отсутствие ПД и ЗУ',
+        investorFinance: 'финансовая целесообразность для инвестора, распределение рисков и доходов',
+      },
     },
   }
 
+  const systemPrompt = [
+    buildMasterInstructions(prompt),
+    '',
+    'Верни ТОЛЬКО JSON без markdown-ограждений и без комментариев вне JSON.',
+    'Заполни схему ниже по документам. Пустые факты — «недостаточно данных», не выдумывай.',
+  ].join('\n')
+
   const userPrompt = [
     `Файл: ${fileName || 'без имени'}`,
+    typeof fileName === 'string' && fileName.includes(',')
+      ? 'Ниже несколько документов одного проекта. Своди параметры по всем файлам, противоречия помечай в comment.'
+      : '',
     notes ? `Пояснения сотрудника:\n${notes}` : 'Пояснения сотрудника: нет',
     '',
     'Схема JSON (заполни по документу):',
     JSON.stringify(schema, null, 2),
     '',
-    '--- Markdown документа ---',
+    '--- Markdown документов ---',
     markdown,
-  ].join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
 
   return { systemPrompt, userPrompt }
 }
 
-export function applyExtraction(project, data) {
+function rankFromNote(note, prompt) {
+  const rows = Array.isArray(note?.financials) ? note.financials : []
+  const metrics = metricList(prompt)
+  let weighted = 0
+  let weightSum = 0
+  for (const metric of metrics) {
+    const weight = Number(metric.weight)
+    if (!Number.isFinite(weight) || weight <= 0) continue
+    const row = rows.find((item) => String(item?.metric || '').toLowerCase().includes(String(metric.name).toLowerCase()) || String(metric.name).toLowerCase().includes(String(item?.metric || '').toLowerCase()))
+    const score = Number(row?.score)
+    if (!Number.isFinite(score)) continue
+    const clamped = Math.min(100, Math.max(0, Math.round(score)))
+    weighted += clamped * weight
+    weightSum += weight
+  }
+  if (weightSum <= 0) return null
+  const score = Math.min(100, Math.max(0, Math.round(weighted / weightSum)))
+  return {
+    concessionScore: score,
+    concessionFit: score >= 78 ? 'advantageous' : score >= 58 ? 'average' : 'unfavorable',
+  }
+}
+
+export function applyExtraction(project, data, prompt) {
   if (!data || typeof data !== 'object') return project
   const next = { ...project }
   if (typeof data.name === 'string' && data.name.trim() && !project.name?.trim()) {
@@ -100,13 +119,18 @@ export function applyExtraction(project, data) {
   if (data.note && typeof data.note === 'object') {
     next.note = mergeNote(project.note, data.note)
   }
-  if (next.score != null || next.recommendation) {
-    const concessionScore = next.score ?? (next.recommendation === 'invest' ? 82 : next.recommendation === 'revise' ? 64 : 42)
-    next.concessionScore = concessionScore
-    next.concessionFit = concessionScore >= 78 ? 'advantageous' : concessionScore >= 58 ? 'average' : 'unfavorable'
-  }
   next.extractedByLlm = true
+  const ranked = rankFromNote(next.note, prompt)
+  if (ranked) {
+    next.concessionScore = ranked.concessionScore
+    next.concessionFit = ranked.concessionFit
+    next.score = next.score ?? ranked.concessionScore
+  }
   return next
+}
+
+function emptyTerms() {
+  return CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))
 }
 
 function mergeNote(current, incoming) {
@@ -120,6 +144,9 @@ function mergeNote(current, incoming) {
     scenarios: [],
     risks: [],
     recommendation: '',
+    riskBalance: { exceptions: '', statement: '' },
+    terms: emptyTerms(),
+    assessment: { imperativeLaw: '', executionRealism: '', investorFinance: '' },
   }
   return {
     executiveSummary: pickText(incoming.executiveSummary, base.executiveSummary),
@@ -131,11 +158,46 @@ function mergeNote(current, incoming) {
     scenarios: Array.isArray(incoming.scenarios) && incoming.scenarios.length ? incoming.scenarios.map(normalizeScenario) : base.scenarios,
     risks: Array.isArray(incoming.risks) && incoming.risks.length ? incoming.risks.map(normalizeRisk) : base.risks,
     recommendation: pickText(incoming.recommendation, base.recommendation),
+    riskBalance: mergeRiskBalance(base.riskBalance, incoming.riskBalance),
+    terms: mergeTerms(base.terms, incoming.terms),
+    assessment: {
+      imperativeLaw: pickText(incoming.assessment?.imperativeLaw, base.assessment?.imperativeLaw),
+      executionRealism: pickText(incoming.assessment?.executionRealism, base.assessment?.executionRealism),
+      investorFinance: pickText(incoming.assessment?.investorFinance, base.assessment?.investorFinance),
+    },
   }
 }
 
+function mergeRiskBalance(current = {}, incoming) {
+  const exceptions = pickText(incoming?.exceptions, current.exceptions)
+  const statement = pickText(
+    incoming?.statement,
+    exceptions
+      ? `Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о ${exceptions}.`
+      : current.statement,
+  )
+  return { exceptions, statement }
+}
+
+function mergeTerms(current = [], incoming) {
+  const byLabel = new Map()
+  for (const row of current) {
+    if (row?.label) byLabel.set(row.label, row)
+  }
+  if (Array.isArray(incoming)) {
+    for (const row of incoming) {
+      const label = String(row?.label || '').trim()
+      if (!label) continue
+      byLabel.set(label, { label, value: String(row?.value || '') })
+    }
+  }
+  const ordered = CONCESSION_TERM_ITEMS.map((item) => byLabel.get(item.label) || { label: item.label, value: '' })
+  const extras = [...byLabel.values()].filter((row) => !CONCESSION_TERM_ITEMS.some((item) => item.label === row.label))
+  return [...ordered, ...extras]
+}
+
 function pickText(value, fallback) {
-  return typeof value === 'string' && value.trim() ? value : fallback
+  return typeof value === 'string' && value.trim() ? value : fallback || ''
 }
 
 function normalizeFinancial(row) {

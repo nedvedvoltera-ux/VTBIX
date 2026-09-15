@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { FitBadge, RecommendationBadge, StatusBadge } from '../components/StatusBadge'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
-import { formatBudget, formatBytes, formatDate } from '../utils/format'
-import { IconFile, IconIndustry, IconPin, IconWallet } from '../components/Icons'
+import { DocumentList } from '../components/DocumentList'
+import { formatBudget, formatDate } from '../utils/format'
+import { IconFile, IconIndustry, IconPin, IconSpark, IconWallet } from '../components/Icons'
 import type { AnalyticalNote, Project } from '../types'
 import { computeRanking } from '../utils/concession'
-import { analyzeProject } from '../api/client'
-import { markdownSummary, markdownWasBuilt, pipelineErrorTitle } from '../utils/pipelineStatus'
+import { analyzeProject, deleteProjectDocument, uploadProjectFiles } from '../api/client'
+import { projectDocuments } from '../utils/documents'
+import { markdownSummary, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function NoteView({ note, project }: { note: AnalyticalNote; project: Project }) {
   return (
@@ -23,6 +25,61 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
         <h3>Описание проекта</h3>
         <p>{note.description}</p>
       </section>
+      {(note.riskBalance?.statement || note.riskBalance?.exceptions) && (
+        <section>
+          <h3>Баланс распределения рисков</h3>
+          <p>
+            {note.riskBalance.statement ||
+              `Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о ${note.riskBalance.exceptions}.`}
+          </p>
+        </section>
+      )}
+      {note.terms && note.terms.some((row) => row.value) && (
+        <section>
+          <h3>Основные условия проекта КС</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Условие</th>
+                  <th>Содержание</th>
+                </tr>
+              </thead>
+              <tbody>
+                {note.terms.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    <td>{row.value || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {note.assessment && (note.assessment.imperativeLaw || note.assessment.executionRealism || note.assessment.investorFinance) && (
+        <section>
+          <h3>Оценка описания</h3>
+          {note.assessment.imperativeLaw && (
+            <>
+              <h4>Императивные нормы закона</h4>
+              <p>{note.assessment.imperativeLaw}</p>
+            </>
+          )}
+          {note.assessment.executionRealism && (
+            <>
+              <h4>Реалистичность исполнения (ПД, ЗУ)</h4>
+              <p>{note.assessment.executionRealism}</p>
+            </>
+          )}
+          {note.assessment.investorFinance && (
+            <>
+              <h4>Финансовая целесообразность для инвестора</h4>
+              <p>{note.assessment.investorFinance}</p>
+            </>
+          )}
+        </section>
+      )}
       <section>
         <h3>Отраслевой контекст</h3>
         <p>{note.industryContext}</p>
@@ -111,6 +168,7 @@ export function ProjectDetailPage() {
   const project = projects.find((item) => item.id === id)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Project | null>(project ?? null)
+  const addRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (project && !editing) setForm(project)
@@ -156,6 +214,18 @@ export function ProjectDetailPage() {
     setEditing(false)
   }
 
+  async function addFiles(files: File[]) {
+    const accepted = files.filter((file) => /\.(xlsx|xls|xlsm|pdf|docx|doc|csv|md|txt)$/i.test(file.name))
+    if (!accepted.length) return
+    await uploadProjectFiles(currentProject.id, accepted, currentProject.notes)
+  }
+
+  async function rebuildFields() {
+    await analyzeProject(currentProject.id, currentProject.notes).catch(() => {
+      void updateProject(currentProject.id, { status: 'processing', progress: 12, pipelineStage: 'extracting' })
+    })
+  }
+
   return (
     <section className="page">
       <div className="page-head">
@@ -190,16 +260,17 @@ export function ProjectDetailPage() {
               <button type="button" className="btn btn--primary" onClick={startEdit}>
                 Править карточку
               </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={project.status === 'processing' || !projectDocuments(project).length}
+                onClick={() => void rebuildFields()}
+              >
+                <IconSpark />
+                Пересобрать поля из файлов
+              </button>
               {project.status === 'error' && (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    void analyzeProject(project.id, project.notes).catch(() => {
-                      void updateProject(project.id, { status: 'processing', progress: 12, pipelineStage: 'converting' })
-                    })
-                  }}
-                >
+                <button type="button" className="btn" onClick={() => void rebuildFields()}>
                   Повторить расчёт
                 </button>
               )}
@@ -262,9 +333,11 @@ export function ProjectDetailPage() {
             </article>
             <article>
               <IconFile />
-              <span>Файл</span>
+              <span>Файлы</span>
               <strong>
-                {project.fileName ?? 'нет'} {project.fileSize ? `· ${formatBytes(project.fileSize)}` : ''}
+                {projectDocuments(project).length
+                  ? `${projectDocuments(project).length} · ${project.fileName}`
+                  : 'нет'}
               </strong>
             </article>
           </div>
@@ -301,22 +374,47 @@ export function ProjectDetailPage() {
             </div>
           )}
 
-          {project.markdownPreview && (
-            <details className="markdown-preview" open={project.status === 'error'}>
-              <summary>
-                Markdown документа (Docling) · {markdownSummary(project)}
-                {markdownWasBuilt(project) && (
-                  <>
-                    {' · '}
-                    <a href={`/api/projects/${project.id}/markdown`} download={`${project.id}.md`}>
-                      скачать .md
-                    </a>
-                  </>
-                )}
-              </summary>
-              <pre>{project.markdownPreview}</pre>
-            </details>
-          )}
+          <div className="panel">
+            <div className="panel__head">
+              <h2>Документы и Markdown</h2>
+              <button type="button" className="btn btn--ghost" onClick={() => addRef.current?.click()}>
+                Добавить файлы
+              </button>
+            </div>
+            <input
+              ref={addRef}
+              type="file"
+              hidden
+              multiple
+              accept=".xlsx,.xls,.xlsm,.pdf,.docx,.doc,.csv,.md,.txt"
+              onChange={(e) => {
+                void addFiles([...(e.target.files || [])])
+                e.target.value = ''
+              }}
+            />
+            {projectDocuments(project).length ? (
+              <DocumentList
+                project={project}
+                onRemove={(docId) => {
+                  void deleteProjectDocument(project.id, docId)
+                }}
+              />
+            ) : (
+              <p className="hint">Добавьте модель, ТЭО или уже готовый Markdown.</p>
+            )}
+            {project.markdownPreview && (
+              <details className="markdown-preview" open={project.status === 'error'}>
+                <summary>
+                  {markdownSummary(project)}
+                  {' · '}
+                  <a href={`/api/projects/${project.id}/markdown`} download={`${project.id}.md`}>
+                    скачать все .md
+                  </a>
+                </summary>
+                <pre>{project.markdownPreview}</pre>
+              </details>
+            )}
+          </div>
 
           {project.status === 'queued' && (
             <div className="banner">
@@ -345,9 +443,9 @@ export function ProjectDetailPage() {
                 <div className="empty empty--soft">
                   <h3>Записка ещё не готова</h3>
                   <p>
-                    {project.fileName
-                      ? 'После завершения расчёта здесь появится аналитическая записка. Её можно заполнить вручную кнопкой «Править карточку».'
-                      : 'Загрузите файл проекта, чтобы запустить разбор.'}
+                    {projectDocuments(project).length
+                      ? 'После «Пересобрать поля» здесь появится записка. Её можно заполнить вручную.'
+                      : 'Загрузите файлы проекта, затем отправьте Markdown в Qwen кнопкой «Пересобрать поля».'}
                   </p>
                 </div>
               )}

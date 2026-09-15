@@ -39,6 +39,22 @@ export type RiskRow = {
   text: string
 }
 
+export type TermRow = {
+  label: string
+  value: string
+}
+
+export type RiskBalance = {
+  exceptions: string
+  statement: string
+}
+
+export type ProjectAssessment = {
+  imperativeLaw: string
+  executionRealism: string
+  investorFinance: string
+}
+
 export type AnalyticalNote = {
   executiveSummary: string
   description: string
@@ -49,6 +65,23 @@ export type AnalyticalNote = {
   scenarios: ScenarioRow[]
   risks: RiskRow[]
   recommendation: string
+  riskBalance?: RiskBalance
+  terms?: TermRow[]
+  assessment?: ProjectAssessment
+}
+
+export type ProjectDocument = {
+  id: string
+  fileName: string
+  fileSize: number
+  filePath?: string
+  markdownPath?: string
+  markdownPreview?: string
+  markdownChars?: number
+  markdownReady?: boolean
+  status?: 'converting' | 'ready' | 'error'
+  error?: string
+  uploadedAt?: string
 }
 
 export type Project = {
@@ -56,6 +89,7 @@ export type Project = {
   name: string
   fileName: string | null
   fileSize: number | null
+  documents?: ProjectDocument[]
   notes: string
   industry: string
   country: string

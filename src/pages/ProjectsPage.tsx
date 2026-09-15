@@ -63,7 +63,11 @@ export function ProjectsPage() {
         .toLowerCase()
       return blob.includes(q)
     })
-    return [...ranked].sort((a, b) => (b.concessionScore ?? -1) - (a.concessionScore ?? -1))
+    return [...ranked].sort((a, b) => {
+      const left = a.extractedByLlm ? a.concessionScore ?? -1 : -2
+      const right = b.extractedByLlm ? b.concessionScore ?? -1 : -2
+      return right - left
+    })
   }, [rankedProjects, query, status, fit, industry, country, region, budget])
 
   const stats = useMemo(() => {
@@ -90,8 +94,8 @@ export function ProjectsPage() {
           <p className="eyebrow">Объекты анализа</p>
           <h1>Ранжирование концессий</h1>
           <p className="lede">
-            Система ищет выгодные концессионные соглашения для концессионера. Порядок задают веса метрик в мастере
-            промпта и баллы по этим метрикам в карточке проекта.
+            Система ранжирует только объекты, которые уже разобрал Qwen. Порядок задают веса метрик в мастере промпта
+            и баллы из реальной карточки. Мок-проекты в список не подставляются.
           </p>
         </div>
         <Link to="/projects/new" className="btn btn--primary">
@@ -243,13 +247,17 @@ export function ProjectsPage() {
 
       {filtered.length === 0 ? (
         <div className="empty">
-          <h3>Ничего не найдено</h3>
-          <p>Снимите часть фильтров или загрузите новый проект.</p>
+          <h3>{projects.length ? 'Ничего не найдено' : 'Пока нет объектов'}</h3>
+          <p>
+            {projects.length
+              ? 'Снимите часть фильтров или загрузите новый проект.'
+              : 'Загрузите концессионное соглашение. Ранжирование появится после разбора моделью.'}
+          </p>
         </div>
       ) : view === 'tile' ? (
         <div className="grid">
           {filtered.map((project, index) => (
-            <ProjectCard key={project.id} project={project} variant="tile" rank={index + 1} />
+            <ProjectCard key={project.id} project={project} variant="tile" rank={project.extractedByLlm ? index + 1 : undefined} />
           ))}
         </div>
       ) : (
@@ -265,7 +273,7 @@ export function ProjectsPage() {
             <span>Вывод</span>
           </div>
           {filtered.map((project, index) => (
-            <ProjectCard key={project.id} project={project} variant="row" rank={index + 1} />
+            <ProjectCard key={project.id} project={project} variant="row" rank={project.extractedByLlm ? index + 1 : undefined} />
           ))}
         </div>
       )}

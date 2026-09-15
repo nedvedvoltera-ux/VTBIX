@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { createDraftProject, useApp } from '../context/AppContext'
-import { extractFromUpload, formatBytes } from '../utils/format'
-import { analyzeProject, jobStreamUrl, uploadProjectFile } from '../api/client'
-import { IconFile, IconSpark, IconUpload } from '../components/Icons'
+import { extractFromUpload } from '../utils/format'
+import { analyzeProject, deleteProjectDocument, jobStreamUrl, uploadProjectFiles } from '../api/client'
+import { IconSpark, IconUpload } from '../components/Icons'
+import { DocumentList } from '../components/DocumentList'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
 import type { Project } from '../types'
-import { markdownSummary, markdownWasBuilt, pipelineErrorTitle } from '../utils/pipelineStatus'
+import { projectDocuments } from '../utils/documents'
+import { markdownSummary, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function stageNotice(project: Project, fallback: string) {
   if (project.pipelineMessage) return project.pipelineMessage
@@ -29,7 +31,7 @@ export function ProjectFormPage() {
   const [extracted, setExtracted] = useState(Boolean(existing?.extractedByLlm))
   const [error, setError] = useState('')
   const [notice, setNotice] = useState(
-    existing ? '' : 'Загрузите файл — Docling сделает Markdown, Qwen заполнит метрики из мастера промпта.',
+    existing ? '' : 'Загрузите файлы — Docling сделает Markdown по каждому. Поля из всех .md собирает кнопка ниже.',
   )
   const inputRef = useRef<HTMLInputElement>(null)
   const streamRef = useRef<EventSource | null>(null)
@@ -45,7 +47,7 @@ export function ProjectFormPage() {
     setNotice(
       found
         ? stageNotice(found, '')
-        : 'Загрузите файл — Docling сделает Markdown, Qwen заполнит метрики из мастера промпта.',
+        : 'Загрузите файлы — Docling сделает Markdown по каждому. Поля из всех .md собирает кнопка ниже.',
     )
   }, [id])
 
@@ -60,7 +62,7 @@ export function ProjectFormPage() {
       setNotice(stageNotice(found, ''))
       return
     }
-    if (extracting && (found.status === 'ready' || found.status === 'error')) {
+    if (extracting) {
       setForm(found)
       setExtracting(false)
       setExtracted(Boolean(found.extractedByLlm))
@@ -76,7 +78,7 @@ export function ProjectFormPage() {
     }
   }, [])
 
-  const canSubmit = Boolean(form.name.trim() && form.fileName)
+  const canSubmit = Boolean(form.name.trim() && projectDocuments(form).length)
 
   const filledCount = useMemo(() => {
     return [form.industry, form.country, form.region, form.budget != null].filter(Boolean).length
@@ -111,7 +113,12 @@ export function ProjectFormPage() {
     source.addEventListener('done', (event) => {
       onProject((event as MessageEvent).data)
       setExtracting(false)
-      setExtracted(true)
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { project?: Project }
+        setExtracted(Boolean(payload.project?.extractedByLlm))
+      } catch {
+        setExtracted(Boolean(form.extractedByLlm))
+      }
       source.close()
     })
     source.addEventListener('failed', (event) => {
@@ -127,42 +134,79 @@ export function ProjectFormPage() {
     })
   }
 
-  async function runExtraction(fileName: string, fileSize: number, notes = form.notes, file?: File) {
+  async function attachFiles(files: File[]) {
+    const accepted = files.filter((file) => /\.(xlsx|xls|xlsm|pdf|docx|doc|csv|md|txt)$/i.test(file.name))
+    if (!accepted.length) {
+      setError('Нужен файл модели или ТЭО: xlsx, pdf, docx, csv, md.')
+      return
+    }
     setExtracting(true)
     setError('')
-    setNotice('Файл принят. Сначала Markdown, затем извлечение параметров…')
+    setNotice(
+      accepted.length > 1
+        ? `Принято ${accepted.length} файла. Docling готовит Markdown…`
+        : 'Файл принят. Docling готовит Markdown…',
+    )
     try {
-      if (apiOnline && file) {
+      if (apiOnline) {
         await upsertProject({
           ...form,
-          fileName,
-          fileSize,
-          notes,
+          notes: form.notes,
           status: 'processing',
           progress: 5,
           pipelineStage: 'converting',
           updatedAt: new Date().toISOString(),
         })
-        const result = await uploadProjectFile(form.id, file, notes)
+        const result = await uploadProjectFiles(form.id, accepted, form.notes)
         setForm(result.project)
-        setNotice(stageNotice(result.project, 'Docling переводит документ в Markdown…'))
+        setNotice(stageNotice(result.project, 'Docling переводит документы в Markdown…'))
         if (result.job?.id) watchJob(result.job.id)
         return
       }
-      if (apiOnline && !file) {
-        const result = await analyzeProject(form.id, notes)
+      setForm((prev) => {
+        const documents = [
+          ...(prev.documents || []),
+          ...accepted.map((file, index) => ({
+            id: `local-${Date.now()}-${index}`,
+            fileName: file.name,
+            fileSize: file.size,
+            markdownReady: false,
+            status: 'ready' as const,
+          })),
+        ]
+        return {
+          ...prev,
+          documents,
+          fileName: documents[0]?.fileName ?? prev.fileName,
+          fileSize: documents.reduce((sum, item) => sum + (item.fileSize || 0), 0),
+          updatedAt: new Date().toISOString(),
+        }
+      })
+      setNotice('Файлы добавлены локально. Для Markdown и Qwen нужен API.')
+      setExtracting(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось обработать файл')
+      setExtracting(false)
+    }
+  }
+
+  async function rebuildFields() {
+    setExtracting(true)
+    setError('')
+    setNotice('Отправляю все Markdown и пояснения в Qwen…')
+    try {
+      if (apiOnline) {
+        const result = await analyzeProject(form.id, form.notes)
         setForm(result.project)
-        setNotice(stageNotice(result.project, 'Повторный разбор документа…'))
+        setNotice(stageNotice(result.project, 'Qwen извлекает параметры…'))
         if (result.job?.id) watchJob(result.job.id)
         return
       }
-      await new Promise((resolve) => setTimeout(resolve, 1400))
-      const data = extractFromUpload(fileName, notes)
+      const names = projectDocuments(form).map((item) => item.fileName).join(' ')
+      const data = extractFromUpload(names || 'notes.txt', form.notes)
       setForm((prev) => ({
         ...prev,
         name: prev.name.trim() ? prev.name : data.name,
-        fileName,
-        fileSize,
         industry: data.industry,
         country: data.country,
         region: data.region,
@@ -171,27 +215,33 @@ export function ProjectFormPage() {
         updatedAt: new Date().toISOString(),
       }))
       setExtracted(true)
-      setNotice('Поля заполнены по файлу и пояснениям. Проверьте и поправьте, если модель ошиблась.')
+      setNotice('Поля заполнены по файлам и пояснениям. Проверьте и поправьте, если модель ошиблась.')
       setExtracting(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось обработать файл')
+      setError(err instanceof Error ? err.message : 'Не удалось запустить разбор')
       setExtracting(false)
     }
   }
 
-  function onFile(file: File | undefined) {
-    if (!file) return
-    const ok = /\.(xlsx|xls|xlsm|pdf|docx|doc|csv)$/i.test(file.name)
-    if (!ok) {
-      setError('Нужен файл модели или ТЭО: xlsx, pdf, docx, csv.')
-      return
+  async function removeDocument(docId: string) {
+    try {
+      if (apiOnline) {
+        const next = await deleteProjectDocument(form.id, docId)
+        setForm(next)
+        return
+      }
+      setForm((prev) => ({
+        ...prev,
+        documents: (prev.documents || []).filter((item) => item.id !== docId),
+      }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось убрать файл')
     }
-    void runExtraction(file.name, file.size, form.notes, file)
   }
 
   function onDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault()
-    onFile(event.dataTransfer.files[0])
+    void attachFiles([...event.dataTransfer.files])
   }
 
   async function persist(status: Project['status'] = form.status) {
@@ -214,7 +264,7 @@ export function ProjectFormPage() {
 
   async function onQueue() {
     if (!canSubmit) {
-      setError('Чтобы отправить на расчёт, нужны название и файл проекта.')
+      setError('Чтобы отправить на расчёт, нужны название и хотя бы один файл.')
       return
     }
     if (apiOnline) {
@@ -245,8 +295,8 @@ export function ProjectFormPage() {
           </p>
           <h1>{existing ? 'Редактирование проекта' : 'Загрузка проекта'}</h1>
           <p className="lede">
-            Положите финансовую модель или ТЭО. Документ сначала станет Markdown через Docling — так сохраняются сложные
-            таблицы — затем локальный Qwen в реальном времени вытаскивает метрики из мастера промпта.
+            Можно прикрепить несколько файлов. Каждый сначала станет Markdown через Docling. Когда все .md готовы,
+            кнопка «Пересобрать поля» отправит их вместе с пояснениями в Qwen.
           </p>
         </div>
       </div>
@@ -262,18 +312,19 @@ export function ProjectFormPage() {
               ref={inputRef}
               type="file"
               hidden
-              accept=".xlsx,.xls,.xlsm,.pdf,.docx,.doc,.csv"
-              onChange={(e) => onFile(e.target.files?.[0])}
+              multiple
+              accept=".xlsx,.xls,.xlsm,.pdf,.docx,.doc,.csv,.md,.txt"
+              onChange={(e) => {
+                void attachFiles([...(e.target.files || [])])
+                e.target.value = ''
+              }}
             />
             <IconUpload />
-            <strong>{form.fileName ? 'Заменить файл' : 'Перетащите файл проекта'}</strong>
-            <span>xlsx, pdf, docx · Docling → Markdown → Qwen сразу после загрузки</span>
-            {form.fileName && (
-              <em className="drop__file">
-                <IconFile /> {form.fileName} · {formatBytes(form.fileSize)}
-              </em>
-            )}
+            <strong>{projectDocuments(form).length ? 'Добавить ещё файлы' : 'Перетащите файлы проекта'}</strong>
+            <span>xlsx, pdf, docx, csv, md · несколько файлов · Docling пишет Markdown, Qwen — по кнопке ниже</span>
           </label>
+
+          <DocumentList project={form} onRemove={(id) => void removeDocument(id)} />
 
           {extracting && (
             <div className="banner">
@@ -294,14 +345,10 @@ export function ProjectFormPage() {
             <details className="markdown-preview" open={form.status === 'error'}>
               <summary>
                 {markdownSummary(form)}
-                {markdownWasBuilt(form) && (
-                  <>
-                    {' · '}
-                    <a href={`/api/projects/${form.id}/markdown`} download={`${form.id}.md`}>
-                      скачать .md
-                    </a>
-                  </>
-                )}
+                {' · '}
+                <a href={`/api/projects/${form.id}/markdown`} download={`${form.id}.md`}>
+                  скачать все .md
+                </a>
               </summary>
               <pre>{form.markdownPreview}</pre>
             </details>
@@ -310,11 +357,11 @@ export function ProjectFormPage() {
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={extracting || (!form.fileName && !form.notes.trim())}
-            onClick={() => void runExtraction(form.fileName ?? 'notes.txt', form.fileSize ?? 0)}
+            disabled={extracting || !projectDocuments(form).length}
+            onClick={() => void rebuildFields()}
           >
             <IconSpark />
-            Пересобрать поля из файла и пояснений
+            Пересобрать поля из файлов и пояснений
           </button>
         </div>
 
@@ -322,7 +369,7 @@ export function ProjectFormPage() {
           <div className="panel__head">
             <h2>Поля карточки</h2>
             <span className={`pill ${extracted ? 'pill--ok' : ''}`}>
-              {extracting ? 'разбор…' : extracted ? `заполнено ${filledCount}/4` : 'ожидает файл'}
+              {extracting ? 'разбор…' : extracted ? `заполнено ${filledCount}/4` : 'ожидает файлы'}
             </span>
           </div>
           {notice && <p className="callout">{notice}</p>}

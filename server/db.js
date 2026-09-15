@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { hydrateProjectDocuments } from './documents.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data')
@@ -69,14 +70,14 @@ export function uid(prefix = 'id') {
 
 export function getProject(id) {
   const row = db.prepare('SELECT payload FROM projects WHERE id = ?').get(id)
-  return row ? JSON.parse(row.payload) : null
+  return row ? hydrateProjectDocuments(JSON.parse(row.payload)) : null
 }
 
 export function listProjects() {
   return db
     .prepare('SELECT payload FROM projects ORDER BY updated_at DESC')
     .all()
-    .map((row) => JSON.parse(row.payload))
+    .map((row) => hydrateProjectDocuments(JSON.parse(row.payload)))
 }
 
 export function saveProject(project) {
@@ -92,7 +93,7 @@ export function saveProject(project) {
     created_at: project.createdAt || updatedAt,
     updated_at: updatedAt,
   })
-  return JSON.parse(payload)
+  return hydrateProjectDocuments(JSON.parse(payload))
 }
 
 export function patchProject(id, patch) {

@@ -1,9 +1,9 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiHealth, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
-import { DEFAULT_PROMPT, INITIAL_PROJECTS } from '../data/mock'
-import type { FinancialRow, Project, PromptConfig } from '../types'
-import { deriveConcession, hydratePrompt, metricsMatch, normalizeMetrics } from '../utils/concession'
+import { DEFAULT_PROMPT } from '../data/mock'
+import type { Project, PromptConfig } from '../types'
+import { hydratePrompt, normalizeMetrics } from '../utils/concession'
 import { uid } from '../utils/format'
 
 const PROJECTS_KEY = 'vtbih.projects'
@@ -30,38 +30,8 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function mergeSeedFinancials(rows: FinancialRow[], seedRows?: FinancialRow[]): FinancialRow[] {
-  if (!seedRows?.length) return rows
-  return rows.map((row) => {
-    if (row.score != null) return row
-    const seedRow = seedRows.find((item) => metricsMatch(item.metric, row.metric))
-    return seedRow?.score != null ? { ...row, score: seedRow.score } : row
-  })
-}
-
 function hydrateProject(project: Project): Project {
-  const seed = INITIAL_PROJECTS.find((item) => item.id === project.id)
-  let next = { ...project }
-
-  if (!next.concessionFit || next.concessionScore == null) {
-    if (seed?.concessionFit) {
-      next = { ...next, concessionFit: seed.concessionFit, concessionScore: seed.concessionScore }
-    } else {
-      next = { ...next, ...deriveConcession(next.score, next.recommendation) }
-    }
-  }
-
-  if (next.note?.financials?.length && next.pipelineStage !== 'extracting' && next.pipelineStage !== 'converting') {
-    next = {
-      ...next,
-      note: {
-        ...next.note,
-        financials: mergeSeedFinancials(next.note.financials, seed?.note?.financials),
-      },
-    }
-  }
-
-  return next
+  return project
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -77,18 +47,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (cancelled) return
       apiOnlineRef.current = online
       setApiOnline(online)
-      if (!online) {
-        setProjects((prev) => (prev.length ? prev : INITIAL_PROJECTS.map(hydrateProject)))
-        return
-      }
+      if (!online) return
       try {
-        let remote = await fetchProjects()
+        const remote = await fetchProjects()
         const remotePrompt = await fetchPrompt()
         if (cancelled) return
-        if (!remote.length) {
-          await Promise.all(INITIAL_PROJECTS.map((item) => putProject(hydrateProject(item))))
-          remote = await fetchProjects()
-        }
         setProjects(remote.map(hydrateProject))
         if (remotePrompt) setPromptState(hydratePrompt(remotePrompt, DEFAULT_PROMPT))
         else await putPrompt(DEFAULT_PROMPT)
@@ -109,52 +72,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localStorage.setItem(PROMPT_KEY, JSON.stringify(prompt))
   }, [prompt])
-
-  useEffect(() => {
-    if (apiOnline) return undefined
-    const timer = window.setInterval(() => {
-      setProjects((prev) =>
-        prev.map((project) => {
-          if (project.status !== 'processing') return project
-          const nextProgress = Math.min(100, project.progress + Math.round(4 + Math.random() * 8))
-          if (nextProgress >= 100) {
-            const score = project.score ?? 70 + Math.round(Math.random() * 15)
-            const recommendation = project.recommendation ?? 'revise'
-            return {
-              ...project,
-              progress: 100,
-              status: 'ready',
-              updatedAt: new Date().toISOString(),
-              recommendation,
-              score,
-              ...deriveConcession(score, recommendation),
-              note: project.note ?? {
-                executiveSummary: `Автоматический расчёт по «${project.name}» завершён. Бюджет ${project.budget ? `${(project.budget / 1_000_000_000).toFixed(1)} млрд ₽` : 'не указан'}. Требуется сверка допущений аналитиком.`,
-                description: project.notes || 'Описание собрано из загруженного файла. Требуется валидация сотрудником.',
-                industryContext: `Отрасль: ${project.industry}. Контекст рынка подставлен из отраслевого справочника (мок).`,
-                location: [project.country, project.region].filter(Boolean).join(', '),
-                budgetBreakdown: 'Структура CAPEX восстановлена укрупнённо. Детализация — в исходном файле.',
-                financials: [
-                  { metric: 'NPV', value: 'расчёт выполнен', comment: 'мок-результат', score: 62 },
-                  { metric: 'IRR', value: 'расчёт выполнен', comment: 'мок-результат', score: 58 },
-                ],
-                scenarios: [
-                  { name: 'Базовый', npv: 'положительный', irr: 'около hurdle' },
-                  { name: 'Стресс', npv: 'на границе', irr: 'ниже hurdle' },
-                ],
-                risks: [
-                  { title: 'Качество исходных данных', level: 'mid', text: 'Часть полей извлечена моделью автоматически.' },
-                ],
-                recommendation: 'Доработать: сверить извлечённые поля и пояснения перед выносом на комитет.',
-              },
-            }
-          }
-          return { ...project, progress: nextProgress, updatedAt: new Date().toISOString() }
-        }),
-      )
-    }, 1800)
-    return () => window.clearInterval(timer)
-  }, [apiOnline])
 
   const hasProcessing = projects.some((item) => item.status === 'processing')
 
@@ -248,5 +165,6 @@ export function createDraftProject(): Project {
     updatedAt: now,
     extractedByLlm: false,
     owner: 'Вы',
+    documents: [],
   }
 }

@@ -125,11 +125,19 @@ export type UploadResult = {
   }
 }
 
-export async function uploadProjectFile(projectId: string, file: File, notes: string) {
+export async function uploadProjectFiles(projectId: string, files: File[], notes: string) {
   const body = new FormData()
-  body.append('file', file)
+  for (const file of files) body.append('files', file)
   body.append('notes', notes)
   return request<UploadResult>(`/projects/${projectId}/file`, { method: 'POST', body })
+}
+
+export async function uploadProjectFile(projectId: string, file: File, notes: string) {
+  return uploadProjectFiles(projectId, [file], notes)
+}
+
+export function deleteProjectDocument(projectId: string, docId: string) {
+  return request<Project>(`/projects/${projectId}/documents/${docId}`, { method: 'DELETE' })
 }
 
 export function analyzeProject(projectId: string, notes?: string) {

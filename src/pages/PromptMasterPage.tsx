@@ -41,6 +41,7 @@ export function PromptMasterPage() {
   const rankingPreview = useMemo(
     () =>
       [...projects]
+        .filter((item) => item.extractedByLlm && item.status === 'ready')
         .map((item) => applyRanking(item, prompt.metrics))
         .sort((a, b) => (b.concessionScore ?? -1) - (a.concessionScore ?? -1))
         .slice(0, 5),
@@ -92,8 +93,8 @@ export function PromptMasterPage() {
           <p className="eyebrow">Настройки</p>
           <h1>Мастер промпта</h1>
           <p className="lede">
-            Соберите инструкцию, по которой модель готовит аналитическую записку. Превью справа собирается из ваших
-            переключателей и подставляет пример объекта из периметра.
+            Соберите инструкцию для Qwen: она же уходит в модель при «Пересобрать поля». Превью справа — тот текст, плюс
+            схема JSON с таблицей условий КС.
           </p>
         </div>
         <div className="actions">

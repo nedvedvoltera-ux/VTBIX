@@ -6,6 +6,7 @@ export class PipelineError extends Error {
     this.markdownPreview = extra.markdownPreview
     this.markdownPath = extra.markdownPath
     this.markdownChars = extra.markdownChars
+    this.documentId = extra.documentId
   }
 }
 

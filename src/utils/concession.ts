@@ -82,6 +82,9 @@ export type RankingResult = {
 }
 
 export function computeRanking(project: Project, metrics: MetricWeight[] = []): RankingResult {
+  if (!project.extractedByLlm || project.status !== 'ready') {
+    return { byMetrics: false, parts: [], weightSum: 0 }
+  }
   const rows = project.note?.financials ?? []
   const parts: RankingPart[] = []
   let weighted = 0
