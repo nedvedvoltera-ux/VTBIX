@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { FitBadge, RecommendationBadge, StatusBadge } from '../components/StatusBadge'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
@@ -164,7 +164,8 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
 
 export function ProjectDetailPage() {
   const { id } = useParams()
-  const { projects, upsertProject, updateProject, prompt } = useApp()
+  const navigate = useNavigate()
+  const { projects, upsertProject, updateProject, removeProject, prompt } = useApp()
   const project = projects.find((item) => item.id === id)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Project | null>(project ?? null)
@@ -226,6 +227,13 @@ export function ProjectDetailPage() {
     })
   }
 
+  async function onDelete() {
+    const label = currentProject.name || 'этот объект'
+    if (!window.confirm(`Удалить «${label}» из базы? Файлы и Markdown тоже будут удалены.`)) return
+    await removeProject(currentProject.id)
+    navigate('/')
+  }
+
   return (
     <section className="page">
       <div className="page-head">
@@ -274,6 +282,9 @@ export function ProjectDetailPage() {
                   Повторить расчёт
                 </button>
               )}
+              <button type="button" className="btn btn--danger" onClick={() => void onDelete()}>
+                Удалить из базы
+              </button>
             </>
           )}
         </div>

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import type { MouseEvent } from 'react'
 import type { Project } from '../types'
 import { formatBudget, formatDate } from '../utils/format'
 import { FitBadge, RecommendationBadge, StatusBadge } from './StatusBadge'
@@ -10,14 +11,23 @@ export function ProjectCard({
   project,
   variant = 'tile',
   rank,
+  onDelete,
 }: {
   project: Project
   variant?: ProjectView
   rank?: number
+  onDelete?: (id: string) => void
 }) {
+  function handleDelete(event: MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    onDelete?.(project.id)
+  }
+
   if (variant === 'row') {
     return (
-      <Link to={`/projects/${project.id}`} className={`project-row project-row--${project.concessionFit ?? 'none'}`}>
+      <div className="project-row-wrap">
+        <Link to={`/projects/${project.id}`} className={`project-row project-row--${project.concessionFit ?? 'none'}`}>
         <span className="project-row__fit">
           {rank != null && <span className="rank">#{rank}</span>}
           <FitBadge value={project.concessionFit} />
@@ -56,10 +66,17 @@ export function ProjectCard({
           )}
         </span>
       </Link>
+      {onDelete && (
+        <button type="button" className="btn btn--ghost project-delete" onClick={handleDelete}>
+          Удалить
+        </button>
+      )}
+    </div>
     )
   }
 
   return (
+    <div className="project-card-wrap">
     <Link to={`/projects/${project.id}`} className={`card project-card project-card--${project.concessionFit ?? 'none'}`}>
       <div className="project-card__head">
         {rank != null && <span className="rank">#{rank}</span>}
@@ -93,5 +110,11 @@ export function ProjectCard({
         </div>
       )}
     </Link>
+      {onDelete && (
+        <button type="button" className="btn btn--ghost project-delete" onClick={handleDelete}>
+          Удалить
+        </button>
+      )}
+    </div>
   )
 }

@@ -8,6 +8,7 @@ import { config } from './config.js'
 import {
   DATA_DIR,
   UPLOAD_DIR,
+  deleteProject,
   finishJob,
   getJob,
   getProject,
@@ -24,7 +25,7 @@ import {
 import { pingDocling } from './docling.js'
 import { combineDocumentsMarkdown, decodeOriginalName, readDocumentMarkdown, summarizeDocuments } from './documents.js'
 import { closeJobStream, emitJob, subscribeJob } from './events.js'
-import { mergeProjectProgress, runConvertDocuments, runExtractDocuments } from './pipeline.js'
+import { abortPipeline, mergeProjectProgress, runConvertDocuments, runExtractDocuments } from './pipeline.js'
 import { getLastLlmProbe, pingLlm, probeLlm } from './qwen.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -235,6 +236,14 @@ app.get('/api/projects/:id', (req, res) => {
 app.put('/api/projects/:id', (req, res) => {
   const project = saveProject({ ...req.body, id: req.params.id })
   res.json(project)
+})
+
+app.delete('/api/projects/:id', (req, res) => {
+  const project = getProject(req.params.id)
+  if (!project) return res.status(404).json({ error: 'not_found', message: 'Проект не найден' })
+  abortPipeline(req.params.id)
+  deleteProject(req.params.id)
+  res.json({ ok: true, id: req.params.id })
 })
 
 app.post('/api/projects', (req, res) => {

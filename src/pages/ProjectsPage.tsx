@@ -19,7 +19,7 @@ function readView(): ProjectView {
 }
 
 export function ProjectsPage() {
-  const { projects, prompt } = useApp()
+  const { projects, prompt, removeProject } = useApp()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'all' | ProjectStatus>('all')
   const [fit, setFit] = useState<'all' | ConcessionFit>('all')
@@ -76,6 +76,13 @@ export function ProjectsPage() {
     const unfavorable = rankedProjects.filter((p) => p.concessionFit === 'unfavorable').length
     return { advantageous, average, unfavorable }
   }, [rankedProjects])
+
+  async function onDelete(id: string) {
+    const project = projects.find((item) => item.id === id)
+    const label = project?.name || 'этот объект'
+    if (!window.confirm(`Удалить «${label}» из базы? Файлы и Markdown тоже будут удалены.`)) return
+    await removeProject(id)
+  }
 
   function resetFilters() {
     setQuery('')
@@ -257,7 +264,13 @@ export function ProjectsPage() {
       ) : view === 'tile' ? (
         <div className="grid">
           {filtered.map((project, index) => (
-            <ProjectCard key={project.id} project={project} variant="tile" rank={project.extractedByLlm ? index + 1 : undefined} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              variant="tile"
+              rank={project.extractedByLlm ? index + 1 : undefined}
+              onDelete={(id) => void onDelete(id)}
+            />
           ))}
         </div>
       ) : (
@@ -273,7 +286,13 @@ export function ProjectsPage() {
             <span>Вывод</span>
           </div>
           {filtered.map((project, index) => (
-            <ProjectCard key={project.id} project={project} variant="row" rank={project.extractedByLlm ? index + 1 : undefined} />
+            <ProjectCard
+              key={project.id}
+              project={project}
+              variant="row"
+              rank={project.extractedByLlm ? index + 1 : undefined}
+              onDelete={(id) => void onDelete(id)}
+            />
           ))}
         </div>
       )}

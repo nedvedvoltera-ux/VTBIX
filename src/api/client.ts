@@ -92,6 +92,10 @@ export function putProject(project: Project) {
   })
 }
 
+export function deleteProject(projectId: string) {
+  return request<{ ok: boolean; id: string }>(`/projects/${projectId}`, { method: 'DELETE' })
+}
+
 export function fetchPrompt() {
   return request<PromptConfig | null>('/prompt')
 }

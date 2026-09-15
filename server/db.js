@@ -97,8 +97,15 @@ export function saveProject(project) {
 }
 
 export function deleteProject(id) {
+  const existed = Boolean(db.prepare('SELECT id FROM projects WHERE id = ?').get(id))
   db.prepare('DELETE FROM llm_jobs WHERE project_id = ?').run(id)
   db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  try {
+    fs.rmSync(path.join(UPLOAD_DIR, id), { recursive: true, force: true })
+  } catch {
+    // folder may be absent
+  }
+  return existed
 }
 
 const SEED_PROJECT_IDS = [

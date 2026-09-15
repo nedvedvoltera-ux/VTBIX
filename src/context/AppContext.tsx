@@ -1,6 +1,6 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { apiHealth, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
+import { apiHealth, deleteProject, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
 import { DEFAULT_PROMPT, SEED_PROJECT_IDS } from '../data/mock'
 import type { Project, PromptConfig } from '../types'
 import { hydratePrompt, normalizeMetrics } from '../utils/concession'
@@ -15,6 +15,7 @@ type AppContextValue = {
   apiOnline: boolean
   upsertProject: (project: Project) => Promise<Project>
   updateProject: (id: string, patch: Partial<Project>) => Promise<void>
+  removeProject: (id: string) => Promise<void>
   setPrompt: (next: PromptConfig) => void
   resetPrompt: () => void
 }
@@ -122,6 +123,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [persist],
   )
 
+  const removeProject = useCallback(async (id: string) => {
+    if (apiOnlineRef.current) await deleteProject(id)
+    setProjects((prev) => prev.filter((item) => item.id !== id))
+  }, [])
+
   const setPrompt = useCallback((next: PromptConfig) => {
     const hydrated = { ...next, metrics: normalizeMetrics(next.metrics) }
     setPromptState(hydrated)
@@ -134,8 +140,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ projects, prompt, apiOnline, upsertProject, updateProject, setPrompt, resetPrompt }),
-    [projects, prompt, apiOnline, upsertProject, updateProject, setPrompt, resetPrompt],
+    () => ({ projects, prompt, apiOnline, upsertProject, updateProject, removeProject, setPrompt, resetPrompt }),
+    [projects, prompt, apiOnline, upsertProject, updateProject, removeProject, setPrompt, resetPrompt],
   )
 
   return createElement(AppContext.Provider, { value }, children)

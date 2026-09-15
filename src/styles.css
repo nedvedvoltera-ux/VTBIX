@@ -229,6 +229,11 @@ button.svc:disabled {
   border-color: var(--ink);
 }
 .btn--ghost { background: transparent; }
+.btn--danger {
+  color: var(--danger);
+  border-color: #e8c4c0;
+}
+.btn--danger:hover { background: #f8ecea; }
 .icon-btn {
   width: 40px;
   height: 40px;
@@ -407,6 +412,31 @@ button.svc:disabled {
 }
 .project-row:last-child { border-bottom: 0; }
 .project-row:hover { background: var(--surface-2); }
+.project-row-wrap {
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+.project-row-wrap:last-child { border-bottom: 0; }
+.project-row-wrap .project-row { border-bottom: 0; padding-right: 88px; }
+.project-row-wrap .project-delete {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  color: var(--danger);
+  padding: 6px 10px;
+}
+.project-card-wrap { position: relative; }
+.project-card-wrap .project-card { padding-bottom: 44px; }
+.project-card-wrap .project-delete {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  color: var(--danger);
+  padding: 6px 10px;
+}
 .project-row__name {
   display: grid;
   gap: 3px;
