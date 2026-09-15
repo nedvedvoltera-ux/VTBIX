@@ -49,6 +49,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_jobs_status ON llm_jobs(status);
 `)
 
+function ensureColumn(table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all()
+  if (!cols.some((col) => col.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+  }
+}
+
+ensureColumn('llm_jobs', 'markdown_path', 'TEXT')
+ensureColumn('llm_jobs', 'stage', 'TEXT')
+
 export function nowIso() {
   return new Date().toISOString()
 }
@@ -128,6 +138,19 @@ export function finishJob(id, fields) {
   ).run({ id, ...fields })
 }
 
+export function updateJob(id, fields) {
+  const allowed = ['status', 'extracted_json', 'response_json', 'error', 'finished_at', 'markdown_path', 'stage']
+  const sets = []
+  const payload = { id }
+  for (const key of allowed) {
+    if (fields[key] === undefined) continue
+    sets.push(`${key} = @${key}`)
+    payload[key] = fields[key]
+  }
+  if (!sets.length) return
+  db.prepare(`UPDATE llm_jobs SET ${sets.join(', ')} WHERE id = @id`).run(payload)
+}
+
 export function listJobs(projectId) {
   const sql = projectId
     ? db.prepare('SELECT * FROM llm_jobs WHERE project_id = ? ORDER BY created_at DESC')
@@ -156,5 +179,7 @@ function serializeJob(row) {
     error: row.error,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
+    markdownPath: row.markdown_path || null,
+    stage: row.stage || row.status,
   }
 }

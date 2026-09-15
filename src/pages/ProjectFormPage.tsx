@@ -3,10 +3,20 @@ import type { DragEvent, FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { createDraftProject, useApp } from '../context/AppContext'
 import { extractFromUpload, formatBytes } from '../utils/format'
-import { uploadProjectFile } from '../api/client'
+import { analyzeProject, jobStreamUrl, uploadProjectFile } from '../api/client'
 import { IconFile, IconSpark, IconUpload } from '../components/Icons'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
 import type { Project } from '../types'
+
+function stageNotice(project: Project, fallback: string) {
+  if (project.pipelineMessage) return project.pipelineMessage
+  if (project.pipelineStage === 'converting') return 'Docling переводит документ в Markdown…'
+  if (project.pipelineStage === 'extracting') return 'Qwen извлекает параметры из Markdown…'
+  if (project.pipelineStage === 'done' || project.status === 'ready') {
+    return 'Параметры найдены. Проверьте и поправьте при необходимости.'
+  }
+  return fallback
+}
 
 export function ProjectFormPage() {
   const { id } = useParams()
@@ -14,19 +24,56 @@ export function ProjectFormPage() {
   const { projects, upsertProject, apiOnline } = useApp()
   const existing = id ? projects.find((item) => item.id === id) : undefined
   const [form, setForm] = useState<Project>(() => existing ?? createDraftProject())
-  const [extracting, setExtracting] = useState(false)
+  const [extracting, setExtracting] = useState(existing?.status === 'processing')
   const [extracted, setExtracted] = useState(Boolean(existing?.extractedByLlm))
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState(existing ? '' : 'Загрузите файл — поля отрасли, локации и бюджета заполнятся автоматически.')
+  const [notice, setNotice] = useState(
+    existing ? '' : 'Загрузите файл — Docling сделает Markdown, Qwen заполнит метрики из мастера промпта.',
+  )
   const inputRef = useRef<HTMLInputElement>(null)
+  const streamRef = useRef<EventSource | null>(null)
+  const formIdRef = useRef(form.id)
+  formIdRef.current = form.id
 
   useEffect(() => {
     const found = id ? projects.find((item) => item.id === id) : undefined
     setForm(found ?? createDraftProject())
     setExtracted(Boolean(found?.extractedByLlm))
+    setExtracting(found?.status === 'processing')
     setError('')
-    setNotice(found ? '' : 'Загрузите файл — поля отрасли, локации и бюджета заполнятся автоматически.')
+    setNotice(
+      found
+        ? stageNotice(found, '')
+        : 'Загрузите файл — Docling сделает Markdown, Qwen заполнит метрики из мастера промпта.',
+    )
   }, [id])
+
+  useEffect(() => {
+    const found = projects.find((item) => item.id === formIdRef.current)
+    if (!found) return
+    const live = found.status === 'processing' || found.pipelineStage === 'converting' || found.pipelineStage === 'extracting'
+    if (live) {
+      setForm(found)
+      setExtracted(Boolean(found.extractedByLlm))
+      setExtracting(true)
+      setNotice(stageNotice(found, ''))
+      return
+    }
+    if (extracting && (found.status === 'ready' || found.status === 'error')) {
+      setForm(found)
+      setExtracting(false)
+      setExtracted(Boolean(found.extractedByLlm))
+      if (found.status === 'error') setError(found.pipelineMessage || 'Разбор остановился')
+      else setNotice(stageNotice(found, ''))
+    }
+  }, [projects, extracting])
+
+  useEffect(() => {
+    return () => {
+      streamRef.current?.close()
+      streamRef.current = null
+    }
+  }, [])
 
   const canSubmit = Boolean(form.name.trim() && form.fileName)
 
@@ -38,10 +85,51 @@ export function ProjectFormPage() {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
 
+  function watchJob(jobId: string) {
+    streamRef.current?.close()
+    const source = new EventSource(jobStreamUrl(jobId))
+    streamRef.current = source
+
+    const onProject = (raw: string) => {
+      try {
+        const payload = JSON.parse(raw) as { project?: Project; message?: string }
+        if (payload.project) {
+          setForm(payload.project)
+          setExtracted(Boolean(payload.project.extractedByLlm))
+          setNotice(stageNotice(payload.project, payload.message || notice))
+        } else if (payload.message) {
+          setNotice(payload.message)
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    }
+
+    source.addEventListener('snapshot', (event) => onProject((event as MessageEvent).data))
+    source.addEventListener('progress', (event) => onProject((event as MessageEvent).data))
+    source.addEventListener('done', (event) => {
+      onProject((event as MessageEvent).data)
+      setExtracting(false)
+      setExtracted(true)
+      source.close()
+    })
+    source.addEventListener('failed', (event) => {
+      onProject((event as MessageEvent).data)
+      setExtracting(false)
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { message?: string }
+        setError(payload.message || 'Разбор остановился')
+      } catch {
+        setError('Разбор остановился')
+      }
+      source.close()
+    })
+  }
+
   async function runExtraction(fileName: string, fileSize: number, notes = form.notes, file?: File) {
     setExtracting(true)
     setError('')
-    setNotice('Модель разбирает файл и пояснения…')
+    setNotice('Файл принят. Сначала Markdown, затем извлечение параметров…')
     try {
       if (apiOnline && file) {
         await upsertProject({
@@ -49,16 +137,22 @@ export function ProjectFormPage() {
           fileName,
           fileSize,
           notes,
+          status: 'processing',
+          progress: 5,
+          pipelineStage: 'converting',
           updatedAt: new Date().toISOString(),
         })
         const result = await uploadProjectFile(form.id, file, notes)
-        setForm((prev) => ({
-          ...result.project,
-          notes: prev.notes,
-          name: prev.name.trim() ? prev.name : result.project.name,
-        }))
-        setExtracted(true)
-        setNotice('Поля заполнены на сервере и сохранены после обработки файла. Проверьте и поправьте при необходимости.')
+        setForm(result.project)
+        setNotice(stageNotice(result.project, 'Docling переводит документ в Markdown…'))
+        if (result.job?.id) watchJob(result.job.id)
+        return
+      }
+      if (apiOnline && !file) {
+        const result = await analyzeProject(form.id, notes)
+        setForm(result.project)
+        setNotice(stageNotice(result.project, 'Повторный разбор документа…'))
+        if (result.job?.id) watchJob(result.job.id)
         return
       }
       await new Promise((resolve) => setTimeout(resolve, 1400))
@@ -77,9 +171,9 @@ export function ProjectFormPage() {
       }))
       setExtracted(true)
       setNotice('Поля заполнены по файлу и пояснениям. Проверьте и поправьте, если модель ошиблась.')
+      setExtracting(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось обработать файл')
-    } finally {
       setExtracting(false)
     }
   }
@@ -122,6 +216,20 @@ export function ProjectFormPage() {
       setError('Чтобы отправить на расчёт, нужны название и файл проекта.')
       return
     }
+    if (apiOnline) {
+      setExtracting(true)
+      try {
+        const result = await analyzeProject(form.id, form.notes)
+        setForm(result.project)
+        if (result.job?.id) watchJob(result.job.id)
+        navigate(`/projects/${result.project.id}`)
+        return
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Не удалось запустить разбор')
+        setExtracting(false)
+        return
+      }
+    }
     const saved = await persist('processing')
     navigate(`/projects/${saved.id}`)
   }
@@ -136,8 +244,8 @@ export function ProjectFormPage() {
           </p>
           <h1>{existing ? 'Редактирование проекта' : 'Загрузка проекта'}</h1>
           <p className="lede">
-            Положите финансовую модель или ТЭО. Пояснения сотрудника подмешиваются в разбор: отрасль, страна, регион и
-            бюджет заполняются сами и остаются редактируемыми.
+            Положите финансовую модель или ТЭО. Документ сначала станет Markdown через Docling — так сохраняются сложные
+            таблицы — затем локальный Qwen в реальном времени вытаскивает метрики из мастера промпта.
           </p>
         </div>
       </div>
@@ -158,13 +266,35 @@ export function ProjectFormPage() {
             />
             <IconUpload />
             <strong>{form.fileName ? 'Заменить файл' : 'Перетащите файл проекта'}</strong>
-            <span>xlsx, pdf, docx · разбор запускается сразу после загрузки</span>
+            <span>xlsx, pdf, docx · Docling → Markdown → Qwen сразу после загрузки</span>
             {form.fileName && (
               <em className="drop__file">
                 <IconFile /> {form.fileName} · {formatBytes(form.fileSize)}
               </em>
             )}
           </label>
+
+          {extracting && (
+            <div className="banner">
+              <div>
+                <strong>
+                  {form.pipelineStage === 'extracting' ? 'Qwen извлекает параметры' : 'Docling готовит Markdown'}
+                </strong>
+                <p>{form.pipelineMessage || notice}</p>
+              </div>
+              <div className="progress progress--wide">
+                <span style={{ width: `${Math.max(form.progress, 6)}%` }} />
+              </div>
+              <em>{form.progress || 0}%</em>
+            </div>
+          )}
+
+          {form.markdownPreview && (
+            <details className="markdown-preview">
+              <summary>Markdown документа</summary>
+              <pre>{form.markdownPreview}</pre>
+            </details>
+          )}
 
           <button
             type="button"

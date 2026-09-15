@@ -44,14 +44,24 @@ export function putPrompt(prompt: PromptConfig) {
   })
 }
 
+export type JobInfo = {
+  id: string
+  projectId: string
+  status: string
+  stage?: string
+  fileName?: string
+  error?: string | null
+}
+
 export type UploadResult = {
   project: Project
-  extracted: {
-    name: string
-    industry: string
-    country: string
-    region: string
-    budget: number
+  job: JobInfo
+  extracted?: {
+    name?: string
+    industry?: string
+    country?: string
+    region?: string
+    budget?: number
   }
 }
 
@@ -60,4 +70,16 @@ export async function uploadProjectFile(projectId: string, file: File, notes: st
   body.append('file', file)
   body.append('notes', notes)
   return request<UploadResult>(`/projects/${projectId}/file`, { method: 'POST', body })
+}
+
+export function analyzeProject(projectId: string, notes?: string) {
+  return request<UploadResult>(`/projects/${projectId}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes: notes || '' }),
+  })
+}
+
+export function jobStreamUrl(jobId: string) {
+  return `${API}/jobs/${jobId}/stream`
 }

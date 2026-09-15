@@ -1,0 +1,16 @@
+node_modules
+dist
+data
+.git
+.gitignore
+.env
+*.md
+*.local
+logs
+*.log
+tmp-*.png
+tmp-*.html
+vtbih-hosting.zip
+.vscode
+.idea
+agent-transcripts

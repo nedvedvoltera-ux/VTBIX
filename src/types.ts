@@ -19,6 +19,12 @@ export type FinancialRow = {
   metric: string
   value: string
   comment: string
+  score?: number
+}
+
+export type MetricWeight = {
+  name: string
+  weight: number
 }
 
 export type ScenarioRow = {
@@ -66,6 +72,9 @@ export type Project = {
   concessionFit?: ConcessionFit
   concessionScore?: number
   note?: AnalyticalNote
+  pipelineStage?: 'converting' | 'extracting' | 'done' | 'error'
+  pipelineMessage?: string
+  markdownPreview?: string
 }
 
 export type PromptSectionId =
@@ -87,7 +96,7 @@ export type PromptConfig = {
   tone: PromptTone
   depth: PromptDepth
   sections: Record<PromptSectionId, boolean>
-  metrics: string[]
+  metrics: MetricWeight[]
   useEmployeeNotes: boolean
   includeComparables: boolean
   includeEsg: boolean

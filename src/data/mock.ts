@@ -1,4 +1,5 @@
-import type { Project, PromptConfig, PromptSectionId } from '../types'
+import type { MetricWeight, Project, PromptConfig, PromptSectionId } from '../types'
+import { normalizeMetrics } from '../utils/concession'
 
 export const INDUSTRIES = [
   'Энергетика',
@@ -67,7 +68,14 @@ export const PROMPT_SECTIONS: { id: PromptSectionId; title: string; hint: string
   { id: 'recommendation', title: 'Инвестиционная рекомендация', hint: 'инвестировать / доработать / отклонить' },
 ]
 
-export const DEFAULT_METRICS = ['NPV', 'IRR', 'DPP', 'WACC', 'EBITDA margin', 'DSCR']
+export const DEFAULT_METRICS: MetricWeight[] = normalizeMetrics([
+  { name: 'NPV', weight: 25 },
+  { name: 'IRR', weight: 25 },
+  { name: 'DPP', weight: 15 },
+  { name: 'WACC', weight: 10 },
+  { name: 'EBITDA margin', weight: 15 },
+  { name: 'DSCR', weight: 10 },
+])
 
 export const DEFAULT_PROMPT: PromptConfig = {
   role: 'Старший финансовый аналитик инвестиционного комитета. Готовишь служебную аналитическую записку для финансового отдела: без маркетинга, с проверяемыми допущениями и явными пробелами в исходных данных.',
@@ -87,7 +95,7 @@ export const DEFAULT_PROMPT: PromptConfig = {
     esg: false,
     recommendation: true,
   },
-  metrics: [...DEFAULT_METRICS],
+  metrics: DEFAULT_METRICS.map((item) => ({ ...item })),
   useEmployeeNotes: true,
   includeComparables: true,
   includeEsg: false,
@@ -130,10 +138,10 @@ export const INITIAL_PROJECTS: Project[] = [
       budgetBreakdown:
         'CAPEX 12,4 млрд ₽: оборудование 61%, СМР 22%, ПИР и управление 9%, резерв 8%. OPEX после ввода — +1,1 млрд ₽/год к текущему уровню за счёт сервиса импортных узлов.',
       financials: [
-        { metric: 'NPV', value: '1,8 млрд ₽', comment: 'WACC 12,4%, горизонт 15 лет' },
-        { metric: 'IRR', value: '14,1%', comment: 'ниже целевых 15% инвестполитики' },
-        { metric: 'DPP', value: '9,6 лет', comment: 'критично для комитета' },
-        { metric: 'DSCR min', value: '1,18', comment: 'в 2030–31 близко к ковенанте 1,2' },
+        { metric: 'NPV', value: '1,8 млрд ₽', comment: 'WACC 12,4%, горизонт 15 лет', score: 76 },
+        { metric: 'IRR', value: '14,1%', comment: 'ниже целевых 15% инвестполитики', score: 68 },
+        { metric: 'DPP', value: '9,6 лет', comment: 'критично для комитета', score: 58 },
+        { metric: 'DSCR', value: '1,18', comment: 'в 2030–31 близко к ковенанте 1,2', score: 70 },
       ],
       scenarios: [
         { name: 'Базовый', npv: '1,8 млрд ₽', irr: '14,1%' },
@@ -219,10 +227,10 @@ export const INITIAL_PROJECTS: Project[] = [
       budgetBreakdown:
         '9,85 млрд ₽: инженерия и энергия 44%, строительная часть 28%, ИБП и охлаждение 18%, прочее 10%.',
       financials: [
-        { metric: 'NPV', value: '4,1 млрд ₽', comment: 'WACC 13%' },
-        { metric: 'IRR', value: '18,4%', comment: 'выше hurdle 15%' },
-        { metric: 'DPP', value: '6,2 года', comment: 'при 70% загрузки' },
-        { metric: 'EBITDA mgn', value: '41%', comment: 'на горизонте стабилизации' },
+        { metric: 'NPV', value: '4,1 млрд ₽', comment: 'WACC 13%', score: 88 },
+        { metric: 'IRR', value: '18,4%', comment: 'выше hurdle 15%', score: 90 },
+        { metric: 'DPP', value: '6,2 года', comment: 'при 70% загрузки', score: 82 },
+        { metric: 'EBITDA margin', value: '41%', comment: 'на горизонте стабилизации', score: 86 },
       ],
       scenarios: [
         { name: 'Базовый', npv: '4,1 млрд ₽', irr: '18,4%' },
@@ -269,9 +277,9 @@ export const INITIAL_PROJECTS: Project[] = [
       budgetBreakdown:
         'Оборудование чистых помещений 48%, строительство 27%, валидация и квалификация 11%, оборотный капитал запуска 14%.',
       financials: [
-        { metric: 'NPV', value: '2,2 млрд ₽', comment: 'WACC 11,8%' },
-        { metric: 'IRR', value: '17,0%', comment: 'базовый сценарий' },
-        { metric: 'DPP', value: '7,1 года', comment: '' },
+        { metric: 'NPV', value: '2,2 млрд ₽', comment: 'WACC 11,8%', score: 82 },
+        { metric: 'IRR', value: '17,0%', comment: 'базовый сценарий', score: 84 },
+        { metric: 'DPP', value: '7,1 года', comment: '', score: 74 },
       ],
       scenarios: [
         { name: 'Базовый', npv: '2,2 млрд ₽', irr: '17,0%' },

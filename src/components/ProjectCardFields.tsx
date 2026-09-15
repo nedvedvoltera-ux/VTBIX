@@ -1,6 +1,7 @@
 import { COUNTRIES, INDUSTRIES, REGIONS_BY_COUNTRY } from '../data/mock'
 import { REGION_RATINGS } from '../data/regions'
 import type { AnalyticalNote, ConcessionFit, Project, ProjectStatus, Recommendation } from '../types'
+import { clampScore } from '../utils/concession'
 
 const STATUSES: { id: ProjectStatus; label: string }[] = [
   { id: 'draft', label: 'Черновик' },
@@ -28,7 +29,7 @@ export const EMPTY_NOTE: AnalyticalNote = {
   industryContext: '',
   location: '',
   budgetBreakdown: '',
-  financials: [{ metric: '', value: '', comment: '' }],
+  financials: [{ metric: '', value: '', comment: '', score: undefined }],
   scenarios: [{ name: '', npv: '', irr: '' }],
   risks: [{ title: '', level: 'mid', text: '' }],
   recommendation: '',
@@ -221,7 +222,7 @@ export function NoteFields({
       <div className="field">
         Финансовые метрики
         {note.financials.map((row, index) => (
-          <div className="inline-add" key={`fin-${index}`}>
+          <div className="inline-add inline-add--metrics" key={`fin-${index}`}>
             <input
               placeholder="Метрика"
               value={row.metric}
@@ -243,6 +244,23 @@ export function NoteFields({
               }
             />
             <input
+              type="number"
+              min={0}
+              max={100}
+              placeholder="Балл 0–100"
+              value={row.score ?? ''}
+              onChange={(e) =>
+                patch(
+                  'financials',
+                  note.financials.map((item, i) =>
+                    i === index
+                      ? { ...item, score: e.target.value === '' ? undefined : clampScore(Number(e.target.value)) }
+                      : item,
+                  ),
+                )
+              }
+            />
+            <input
               placeholder="Комментарий"
               value={row.comment}
               onChange={(e) =>
@@ -257,7 +275,7 @@ export function NoteFields({
         <button
           type="button"
           className="btn btn--ghost"
-          onClick={() => patch('financials', [...note.financials, { metric: '', value: '', comment: '' }])}
+          onClick={() => patch('financials', [...note.financials, { metric: '', value: '', comment: '', score: undefined }])}
         >
           Добавить метрику
         </button>

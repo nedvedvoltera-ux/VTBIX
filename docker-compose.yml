@@ -1,15 +1,41 @@
+name: vtbih
+
 services:
   api:
     build: .
+    image: vtbih-api:1.1.0
     ports:
       - "8080:8080"
     environment:
       PORT: 8080
       DATA_DIR: /app/data
-      LLM_API_URL: ${LLM_API_URL:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
+      DOCLING_URL: ${DOCLING_URL:-http://docling:5001}
+      DOCLING_TIMEOUT_MS: ${DOCLING_TIMEOUT_MS:-180000}
+      DOCLING_TABLE_MODE: ${DOCLING_TABLE_MODE:-accurate}
+      SUMMARY_API_BASE_URL: ${SUMMARY_API_BASE_URL:-http://192.168.215.74:9080/v1}
+      SUMMARY_MODEL: ${SUMMARY_MODEL:-Qwen/Qwen3.5-35B-A3B-FP8}
+      SUMMARY_API_KEY: ${SUMMARY_API_KEY:-}
+      SUMMARY_ENABLE_THINKING: ${SUMMARY_ENABLE_THINKING:-false}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-300000}
+      LLM_MAX_DOC_CHARS: ${LLM_MAX_DOC_CHARS:-80000}
     volumes:
       - vtbih-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      docling:
+        condition: service_started
+    restart: unless-stopped
+
+  docling:
+    image: ghcr.io/docling-project/docling-serve:latest
+    ports:
+      - "5001:5001"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "0"
+    shm_size: "1gb"
     restart: unless-stopped
 
 volumes:

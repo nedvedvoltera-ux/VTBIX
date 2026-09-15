@@ -6,6 +6,8 @@ import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/Project
 import { formatBudget, formatBytes, formatDate } from '../utils/format'
 import { IconFile, IconIndustry, IconPin, IconWallet } from '../components/Icons'
 import type { AnalyticalNote, Project } from '../types'
+import { computeRanking } from '../utils/concession'
+import { analyzeProject } from '../api/client'
 
 function NoteView({ note, project }: { note: AnalyticalNote; project: Project }) {
   return (
@@ -40,6 +42,7 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
               <tr>
                 <th>Метрика</th>
                 <th>Значение</th>
+                <th>Балл</th>
                 <th>Комментарий</th>
               </tr>
             </thead>
@@ -48,6 +51,7 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
                 <tr key={`${row.metric}-${index}`}>
                   <td>{row.metric}</td>
                   <td>{row.value}</td>
+                  <td>{row.score != null ? row.score : '—'}</td>
                   <td>{row.comment}</td>
                 </tr>
               ))}
@@ -102,7 +106,7 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
 
 export function ProjectDetailPage() {
   const { id } = useParams()
-  const { projects, upsertProject, updateProject } = useApp()
+  const { projects, upsertProject, updateProject, prompt } = useApp()
   const project = projects.find((item) => item.id === id)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Project | null>(project ?? null)
@@ -126,6 +130,7 @@ export function ProjectDetailPage() {
 
   const currentProject = project
   const currentForm = form
+  const ranking = computeRanking(currentProject, prompt.metrics)
 
   function patch<K extends keyof Project>(key: K, value: Project[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
@@ -188,7 +193,11 @@ export function ProjectDetailPage() {
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => updateProject(project.id, { status: 'processing', progress: 12 })}
+                  onClick={() => {
+                    void analyzeProject(project.id, project.notes).catch(() => {
+                      void updateProject(project.id, { status: 'processing', progress: 12, pipelineStage: 'converting' })
+                    })
+                  }}
                 >
                   Повторить расчёт
                 </button>
@@ -226,9 +235,14 @@ export function ProjectDetailPage() {
             <article>
               <span>Приоритет концессии</span>
               <strong>
-                <FitBadge value={project.concessionFit} />
-                {project.concessionScore != null ? ` · балл ${project.concessionScore}` : ''}
+                <FitBadge value={ranking.fit ?? project.concessionFit} />
+                {ranking.score != null ? ` · балл ${ranking.score}` : ''}
               </strong>
+              {ranking.byMetrics ? (
+                <em className="hint">по весам метрик</em>
+              ) : project.concessionScore != null ? (
+                <em className="hint">балл карточки</em>
+              ) : null}
             </article>
             <article>
               <IconIndustry />
@@ -254,17 +268,43 @@ export function ProjectDetailPage() {
             </article>
           </div>
 
+          {ranking.byMetrics && ranking.parts.length > 0 && (
+            <div className="ranking-breakdown">
+              {ranking.parts.map((part) => (
+                <span key={part.name}>
+                  {part.name}
+                  <strong>{part.score}</strong>
+                  <em>вес {part.weight}</em>
+                </span>
+              ))}
+            </div>
+          )}
+
           {project.status === 'processing' && (
             <div className="banner">
               <div>
-                <strong>Идёт автоматизированный расчёт</strong>
-                <p>Модель готовит записку по текущим настройкам мастера промпта.</p>
+                <strong>
+                  {project.pipelineStage === 'extracting'
+                    ? 'Qwen извлекает параметры'
+                    : 'Docling переводит документ в Markdown'}
+                </strong>
+                <p>
+                  {project.pipelineMessage ||
+                    'Модель готовит записку по текущим настройкам мастера промпта. Поля карточки заполняются по мере ответа.'}
+                </p>
               </div>
               <div className="progress progress--wide">
                 <span style={{ width: `${project.progress}%` }} />
               </div>
               <em>{project.progress}%</em>
             </div>
+          )}
+
+          {project.markdownPreview && (
+            <details className="markdown-preview">
+              <summary>Markdown документа (Docling)</summary>
+              <pre>{project.markdownPreview}</pre>
+            </details>
           )}
 
           {project.status === 'queued' && (
@@ -280,7 +320,10 @@ export function ProjectDetailPage() {
             <div className="banner banner--danger">
               <div>
                 <strong>Расчёт остановился</strong>
-                <p>В мок-сценарии не удалось прочитать часть листов финансовой модели. Повторите или поправьте файл.</p>
+                <p>
+                  {project.pipelineMessage ||
+                    'Не удалось прочитать документ через Docling или извлечь параметры моделью. Повторите или поправьте файл.'}
+                </p>
               </div>
             </div>
           )}

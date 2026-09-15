@@ -140,7 +140,17 @@ export async function runLlmExtraction({ fileName, notes, prompt }) {
   }
 }
 
-export function buildReadyNote(project) {
+function metricList(prompt) {
+  const raw = Array.isArray(prompt?.metrics) ? prompt.metrics : []
+  return raw
+    .map((item) => (typeof item === 'string' ? { name: item, weight: 10 } : item))
+    .filter((item) => item?.name)
+}
+
+export function buildReadyNote(project, prompt) {
+  const metrics = metricList(prompt)
+  const names = metrics.length ? metrics.map((item) => item.name) : ['NPV', 'IRR']
+  const seed = project.score ?? 70
   return {
     executiveSummary: `Автоматический расчёт по «${project.name}» завершён. Бюджет ${
       project.budget ? `${(project.budget / 1_000_000_000).toFixed(1)} млрд ₽` : 'не указан'
@@ -149,10 +159,12 @@ export function buildReadyNote(project) {
     industryContext: `Отрасль: ${project.industry}. Контекст рынка подставлен из отраслевого справочника.`,
     location: [project.country, project.region].filter(Boolean).join(', '),
     budgetBreakdown: 'Структура CAPEX восстановлена укрупнённо. Детализация — в исходном файле.',
-    financials: [
-      { metric: 'NPV', value: 'расчёт выполнен', comment: 'результат обработки' },
-      { metric: 'IRR', value: 'расчёт выполнен', comment: 'результат обработки' },
-    ],
+    financials: names.map((name, index) => ({
+      metric: name,
+      value: 'расчёт выполнен',
+      comment: 'результат обработки',
+      score: Math.max(40, Math.min(95, seed - 6 + index * 3 + Math.round(Math.random() * 8))),
+    })),
     scenarios: [
       { name: 'Базовый', npv: 'положительный', irr: 'около hurdle' },
       { name: 'Стресс', npv: 'на границе', irr: 'ниже hurdle' },
@@ -164,7 +176,7 @@ export function buildReadyNote(project) {
   }
 }
 
-export function completeProcessing(project) {
+export function completeProcessing(project, prompt) {
   const score = project.score ?? 70 + Math.round(Math.random() * 15)
   const recommendation = project.recommendation ?? 'revise'
   return {
@@ -175,6 +187,6 @@ export function completeProcessing(project) {
     recommendation,
     score,
     ...deriveConcession(score, recommendation),
-    note: project.note ?? buildReadyNote({ ...project, score, recommendation }),
+    note: project.note ?? buildReadyNote({ ...project, score, recommendation }, prompt),
   }
 }

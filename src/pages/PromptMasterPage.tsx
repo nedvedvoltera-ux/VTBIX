@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { DEFAULT_METRICS, PROMPT_SECTIONS } from '../data/mock'
-import type { OutputFormat, PromptConfig, PromptDepth, PromptSectionId, PromptTone, RecommendationStyle } from '../types'
+import type { MetricWeight, OutputFormat, PromptConfig, PromptDepth, PromptSectionId, PromptTone, RecommendationStyle } from '../types'
+import { applyRanking, clampScore, DEFAULT_METRIC_WEIGHT, metricKey } from '../utils/concession'
 import { buildPromptPreview } from '../utils/promptBuilder'
 
 const TONES: { id: PromptTone; label: string; hint: string }[] = [
@@ -35,6 +37,15 @@ export function PromptMasterPage() {
 
   const preview = useMemo(() => buildPromptPreview(prompt, sample), [prompt, sample])
   const enabledCount = Object.values(prompt.sections).filter(Boolean).length
+  const weightSum = prompt.metrics.reduce((sum, item) => sum + item.weight, 0)
+  const rankingPreview = useMemo(
+    () =>
+      [...projects]
+        .map((item) => applyRanking(item, prompt.metrics))
+        .sort((a, b) => (b.concessionScore ?? -1) - (a.concessionScore ?? -1))
+        .slice(0, 5),
+    [projects, prompt.metrics],
+  )
 
   function patch(partial: Partial<PromptConfig>) {
     setSaved(false)
@@ -52,9 +63,21 @@ export function PromptMasterPage() {
 
   function addMetric() {
     const value = metricDraft.trim()
-    if (!value || prompt.metrics.includes(value)) return
-    patch({ metrics: [...prompt.metrics, value] })
+    if (!value) return
+    const key = metricKey(value)
+    if (prompt.metrics.some((item) => metricKey(item.name) === key)) return
+    patch({ metrics: [...prompt.metrics, { name: value, weight: DEFAULT_METRIC_WEIGHT }] })
     setMetricDraft('')
+  }
+
+  function patchMetric(index: number, partial: Partial<MetricWeight>) {
+    patch({
+      metrics: prompt.metrics.map((item, i) => (i === index ? { ...item, ...partial } : item)),
+    })
+  }
+
+  function removeMetric(index: number) {
+    patch({ metrics: prompt.metrics.filter((_, i) => i !== index) })
   }
 
   function save() {
@@ -169,19 +192,41 @@ export function PromptMasterPage() {
           </div>
 
           <div className="card settings-block">
-            <h2>Метрики и правила</h2>
-            <div className="chips">
-              {prompt.metrics.map((metric) => (
-                <button
-                  key={metric}
-                  type="button"
-                  className="chip is-on chip--dismiss"
-                  onClick={() => patch({ metrics: prompt.metrics.filter((item) => item !== metric) })}
-                >
-                  {metric} ×
-                </button>
+            <h2>Метрики и веса ранжирования</h2>
+            <p className="hint">
+              Вес — вклад метрики в итоговый балл на главной. Балл по самой метрике (0–100) ставится в карточке проекта.
+              Порядок объектов пересчитывается сразу.
+            </p>
+            <ul className="metric-weights">
+              {prompt.metrics.map((metric, index) => (
+                <li key={`${metric.name}-${index}`}>
+                  <strong>{metric.name}</strong>
+                  <label>
+                    Вес
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={metric.weight}
+                      onChange={(e) => patchMetric(index, { weight: clampScore(Number(e.target.value)) })}
+                    />
+                  </label>
+                  <input
+                    className="metric-weights__num"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={metric.weight}
+                    onChange={(e) =>
+                      patchMetric(index, { weight: e.target.value === '' ? 0 : clampScore(Number(e.target.value)) })
+                    }
+                  />
+                  <button type="button" className="chip chip--dismiss" onClick={() => removeMetric(index)}>
+                    ×
+                  </button>
+                </li>
               ))}
-            </div>
+            </ul>
             <div className="inline-add">
               <input
                 value={metricDraft}
@@ -197,13 +242,28 @@ export function PromptMasterPage() {
               />
               <datalist id="metrics-list">
                 {DEFAULT_METRICS.map((item) => (
-                  <option key={item} value={item} />
+                  <option key={item.name} value={item.name} />
                 ))}
               </datalist>
               <button type="button" className="btn" onClick={addMetric}>
                 Добавить
               </button>
             </div>
+            <p className="hint">Сумма весов: {weightSum}. Нулевой вес оставляет метрику в записке, но не двигает рейтинг.</p>
+            {rankingPreview.length > 0 && (
+              <>
+                <p className="field-label">Текущий порядок на главной</p>
+                <ol className="ranking-preview">
+                  {rankingPreview.map((item, index) => (
+                    <li key={item.id}>
+                      <span>#{index + 1}</span>
+                      <Link to={`/projects/${item.id}`}>{item.name || 'Без названия'}</Link>
+                      <em>{item.concessionScore != null ? `балл ${item.concessionScore}` : 'нет балла'}</em>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
 
             <label className="check">
               <input

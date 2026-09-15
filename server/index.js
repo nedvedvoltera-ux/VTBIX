@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import multer from 'multer'
+import { config } from './config.js'
 import {
   DATA_DIR,
   UPLOAD_DIR,
@@ -15,15 +16,19 @@ import {
   listJobs,
   listProjects,
   nowIso,
-  patchProject,
   saveProject,
   savePrompt,
   uid,
+  updateJob,
 } from './db.js'
-import { completeProcessing, runLlmExtraction } from './llm.js'
+import { pingDocling } from './docling.js'
+import { closeJobStream, emitJob, subscribeJob } from './events.js'
+import { completeProcessing } from './llm.js'
+import { pingLlm } from './qwen.js'
+import { abortPipeline, mergeProjectProgress, runDocumentPipeline, runningPipelines } from './pipeline.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const PORT = Number(process.env.PORT || 8080)
+const PORT = config.port
 const app = express()
 
 app.use(cors())
@@ -50,8 +55,89 @@ const upload = multer({
   },
 })
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'vtbih-api', dataDir: DATA_DIR })
+function startPipelineJob({ jobId, project, filePath, fileName, notes, prompt }) {
+  abortPipeline(project.id)
+  void (async () => {
+    let latest = getProject(project.id) || project
+    try {
+      await runDocumentPipeline({
+        project: latest,
+        filePath,
+        fileName,
+        notes,
+        prompt,
+        onProgress: async (payload) => {
+          latest = getProject(project.id) || latest
+          const next = saveProject(mergeProjectProgress(latest, payload))
+          updateJob(jobId, {
+            status: payload.stage === 'done' ? 'done' : 'running',
+            stage: payload.stage,
+            markdown_path: payload.markdownPath || undefined,
+            extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : undefined,
+          })
+          emitJob(jobId, 'progress', {
+            stage: payload.stage,
+            progress: next.progress,
+            message: payload.message,
+            project: next,
+          })
+          if (payload.stage === 'done') {
+            fs.writeFileSync(
+              `${filePath}.llm.json`,
+              JSON.stringify({ extracted: payload.extracted, jobId, markdownPath: payload.markdownPath }, null, 2),
+              'utf8',
+            )
+            finishJob(jobId, {
+              status: 'done',
+              extracted_json: JSON.stringify(payload.extracted ?? {}),
+              response_json: JSON.stringify({
+                provider: config.llmApiUrl ? 'qwen' : 'heuristic',
+                model: config.llmModel,
+                markdownPath: payload.markdownPath,
+              }),
+              error: null,
+              finished_at: nowIso(),
+            })
+            emitJob(jobId, 'done', { project: next, extracted: payload.extracted })
+            closeJobStream(jobId)
+          }
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const failed = saveProject({
+        ...(getProject(project.id) || latest),
+        status: 'error',
+        pipelineStage: 'error',
+        pipelineMessage: message,
+        updatedAt: nowIso(),
+      })
+      finishJob(jobId, {
+        status: 'error',
+        extracted_json: null,
+        response_json: null,
+        error: message,
+        finished_at: nowIso(),
+      })
+      updateJob(jobId, { stage: 'error' })
+      emitJob(jobId, 'failed', { message, project: failed })
+      closeJobStream(jobId)
+    }
+  })()
+}
+
+app.get('/api/health', async (_req, res) => {
+  const [docling, llm] = await Promise.all([pingDocling(), pingLlm()])
+  res.json({
+    ok: true,
+    service: 'vtbih-api',
+    dataDir: DATA_DIR,
+    pipeline: {
+      docling,
+      llm,
+      model: config.llmModel,
+    },
+  })
 })
 
 app.get('/api/projects', (_req, res) => {
@@ -87,7 +173,7 @@ app.post('/api/projects', (req, res) => {
 })
 
 app.post('/api/projects/:id/file', (req, res) => {
-  upload.single('file')(req, res, async (err) => {
+  upload.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message })
     if (!req.file) return res.status(400).json({ error: 'file_required' })
 
@@ -113,16 +199,29 @@ app.post('/api/projects/:id/file', (req, res) => {
       })
     }
 
-    const jobId = uid('job')
+    const notes = req.body.notes || project.notes || ''
     const prompt = getPrompt()
+    const jobId = uid('job')
+    const next = saveProject({
+      ...project,
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      notes,
+      status: 'processing',
+      progress: 5,
+      pipelineStage: 'converting',
+      pipelineMessage: 'Файл принят. Docling готовит Markdown…',
+      updatedAt: nowIso(),
+    })
+
     insertJob({
       id: jobId,
-      project_id: project.id,
+      project_id: next.id,
       status: 'running',
       file_name: req.file.originalname,
       file_path: req.file.path,
       file_size: req.file.size,
-      notes: req.body.notes || project.notes || '',
+      notes,
       prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
       extracted_json: null,
       response_json: null,
@@ -130,48 +229,65 @@ app.post('/api/projects/:id/file', (req, res) => {
       created_at: nowIso(),
       finished_at: null,
     })
+    updateJob(jobId, { stage: 'converting' })
 
-    try {
-      const llm = await runLlmExtraction({
-        fileName: req.file.originalname,
-        notes: req.body.notes || project.notes || '',
-        prompt,
-        filePath: req.file.path,
-      })
-      const extracted = llm.extracted || llm
-      const next = saveProject({
-        ...project,
-        fileName: req.file.originalname,
-        fileSize: req.file.size,
-        name: project.name?.trim() ? project.name : extracted.name,
-        industry: extracted.industry,
-        country: extracted.country,
-        region: extracted.region,
-        budget: extracted.budget,
-        extractedByLlm: true,
-        updatedAt: nowIso(),
-      })
-      const artifactPath = `${req.file.path}.llm.json`
-      fs.writeFileSync(artifactPath, JSON.stringify({ extracted, llm, jobId }, null, 2), 'utf8')
-      finishJob(jobId, {
-        status: 'done',
-        extracted_json: JSON.stringify(extracted),
-        response_json: JSON.stringify(llm),
-        error: null,
-        finished_at: nowIso(),
-      })
-      res.json({ project: next, job: getJob(jobId), extracted })
-    } catch (error) {
-      finishJob(jobId, {
-        status: 'error',
-        extracted_json: null,
-        response_json: null,
-        error: error instanceof Error ? error.message : String(error),
-        finished_at: nowIso(),
-      })
-      res.status(502).json({ error: 'llm_failed', message: error instanceof Error ? error.message : String(error) })
-    }
+    startPipelineJob({
+      jobId,
+      project: next,
+      filePath: req.file.path,
+      fileName: req.file.originalname,
+      notes,
+      prompt,
+    })
+
+    res.json({ project: next, job: getJob(jobId) })
   })
+})
+
+app.post('/api/projects/:id/analyze', (req, res) => {
+  const project = getProject(req.params.id)
+  if (!project) return res.status(404).json({ error: 'not_found' })
+  const jobs = listJobs(project.id)
+  const source = jobs.find((item) => item.filePath && fs.existsSync(item.filePath))
+  if (!source) return res.status(400).json({ error: 'file_required', message: 'Сначала загрузите файл проекта.' })
+
+  const notes = req.body?.notes || project.notes || source.notes || ''
+  const prompt = getPrompt()
+  const jobId = uid('job')
+  const next = saveProject({
+    ...project,
+    notes,
+    status: 'processing',
+    progress: 5,
+    pipelineStage: 'converting',
+    pipelineMessage: 'Повторный разбор: Docling → Qwen…',
+    updatedAt: nowIso(),
+  })
+  insertJob({
+    id: jobId,
+    project_id: next.id,
+    status: 'running',
+    file_name: source.fileName,
+    file_path: source.filePath,
+    file_size: source.fileSize,
+    notes,
+    prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
+    extracted_json: null,
+    response_json: null,
+    error: null,
+    created_at: nowIso(),
+    finished_at: null,
+  })
+  updateJob(jobId, { stage: 'converting' })
+  startPipelineJob({
+    jobId,
+    project: next,
+    filePath: source.filePath,
+    fileName: source.fileName,
+    notes,
+    prompt,
+  })
+  res.json({ project: next, job: getJob(jobId) })
 })
 
 app.get('/api/projects/:id/jobs', (req, res) => {
@@ -186,6 +302,26 @@ app.get('/api/jobs/:id', (req, res) => {
   const job = getJob(req.params.id)
   if (!job) return res.status(404).json({ error: 'not_found' })
   res.json(job)
+})
+
+app.get('/api/jobs/:id/stream', (req, res) => {
+  const job = getJob(req.params.id)
+  if (!job) return res.status(404).json({ error: 'not_found' })
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  if (typeof res.flushHeaders === 'function') res.flushHeaders()
+  res.write(`event: snapshot\ndata: ${JSON.stringify({ job, project: getProject(job.projectId) })}\n\n`)
+  subscribeJob(job.id, res)
+  if (job.status === 'done' || job.status === 'error') {
+    emitJob(job.id, job.status === 'done' ? 'done' : 'failed', {
+      project: getProject(job.projectId),
+      extracted: job.extracted,
+      message: job.error,
+    })
+    closeJobStream(job.id)
+  }
 })
 
 app.get('/api/prompt', (_req, res) => {
@@ -209,9 +345,12 @@ if (fs.existsSync(distDir)) {
 setInterval(() => {
   for (const project of listProjects()) {
     if (project.status !== 'processing') continue
+    if (runningPipelines.has(project.id) || project.pipelineStage === 'converting' || project.pipelineStage === 'extracting') {
+      continue
+    }
     const nextProgress = Math.min(100, (project.progress || 0) + Math.round(6 + Math.random() * 10))
     if (nextProgress >= 100) {
-      saveProject(completeProcessing(project))
+      saveProject(completeProcessing(project, getPrompt()))
     } else {
       saveProject({ ...project, progress: nextProgress, updatedAt: nowIso() })
     }
@@ -220,4 +359,5 @@ setInterval(() => {
 
 app.listen(PORT, () => {
   console.log(`VTBIH API http://localhost:${PORT}`)
+  console.log(`Docling ${config.doclingUrl || 'не задан'} · Qwen ${config.llmApiUrl || 'не задан'} · ${config.llmModel}`)
 })

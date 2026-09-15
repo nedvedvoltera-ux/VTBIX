@@ -2,8 +2,8 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 import type { ReactNode } from 'react'
 import { apiHealth, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
 import { DEFAULT_PROMPT, INITIAL_PROJECTS } from '../data/mock'
-import type { Project, PromptConfig } from '../types'
-import { deriveConcession } from '../utils/concession'
+import type { FinancialRow, Project, PromptConfig } from '../types'
+import { deriveConcession, hydratePrompt, metricsMatch, normalizeMetrics } from '../utils/concession'
 import { uid } from '../utils/format'
 
 const PROJECTS_KEY = 'vtbih.projects'
@@ -30,18 +30,43 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
+function mergeSeedFinancials(rows: FinancialRow[], seedRows?: FinancialRow[]): FinancialRow[] {
+  if (!seedRows?.length) return rows
+  return rows.map((row) => {
+    if (row.score != null) return row
+    const seedRow = seedRows.find((item) => metricsMatch(item.metric, row.metric))
+    return seedRow?.score != null ? { ...row, score: seedRow.score } : row
+  })
+}
+
 function hydrateProject(project: Project): Project {
-  if (project.concessionFit && project.concessionScore != null) return project
   const seed = INITIAL_PROJECTS.find((item) => item.id === project.id)
-  if (seed?.concessionFit) {
-    return { ...project, concessionFit: seed.concessionFit, concessionScore: seed.concessionScore }
+  let next = { ...project }
+
+  if (!next.concessionFit || next.concessionScore == null) {
+    if (seed?.concessionFit) {
+      next = { ...next, concessionFit: seed.concessionFit, concessionScore: seed.concessionScore }
+    } else {
+      next = { ...next, ...deriveConcession(next.score, next.recommendation) }
+    }
   }
-  return { ...project, ...deriveConcession(project.score, project.recommendation) }
+
+  if (next.note?.financials?.length && next.pipelineStage !== 'extracting' && next.pipelineStage !== 'converting') {
+    next = {
+      ...next,
+      note: {
+        ...next.note,
+        financials: mergeSeedFinancials(next.note.financials, seed?.note?.financials),
+      },
+    }
+  }
+
+  return next
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>(() => readJson<Project[]>(PROJECTS_KEY, []).map(hydrateProject))
-  const [prompt, setPromptState] = useState<PromptConfig>(() => readJson(PROMPT_KEY, DEFAULT_PROMPT))
+  const [prompt, setPromptState] = useState<PromptConfig>(() => hydratePrompt(readJson(PROMPT_KEY, DEFAULT_PROMPT), DEFAULT_PROMPT))
   const [apiOnline, setApiOnline] = useState(false)
   const apiOnlineRef = useRef(false)
 
@@ -65,7 +90,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           remote = await fetchProjects()
         }
         setProjects(remote.map(hydrateProject))
-        if (remotePrompt) setPromptState(remotePrompt)
+        if (remotePrompt) setPromptState(hydratePrompt(remotePrompt, DEFAULT_PROMPT))
         else await putPrompt(DEFAULT_PROMPT)
       } catch {
         apiOnlineRef.current = false
@@ -110,8 +135,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 location: [project.country, project.region].filter(Boolean).join(', '),
                 budgetBreakdown: 'Структура CAPEX восстановлена укрупнённо. Детализация — в исходном файле.',
                 financials: [
-                  { metric: 'NPV', value: 'расчёт выполнен', comment: 'мок-результат' },
-                  { metric: 'IRR', value: 'расчёт выполнен', comment: 'мок-результат' },
+                  { metric: 'NPV', value: 'расчёт выполнен', comment: 'мок-результат', score: 62 },
+                  { metric: 'IRR', value: 'расчёт выполнен', comment: 'мок-результат', score: 58 },
                 ],
                 scenarios: [
                   { name: 'Базовый', npv: 'положительный', irr: 'около hurdle' },
@@ -131,15 +156,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(timer)
   }, [apiOnline])
 
+  const hasProcessing = projects.some((item) => item.status === 'processing')
+
   useEffect(() => {
     if (!apiOnline) return undefined
     const timer = window.setInterval(() => {
       void fetchProjects()
         .then((remote) => setProjects(remote.map(hydrateProject)))
         .catch(() => undefined)
-    }, 2500)
+    }, hasProcessing ? 1000 : 2500)
     return () => window.clearInterval(timer)
-  }, [apiOnline])
+  }, [apiOnline, hasProcessing])
 
   const persist = useCallback(async (project: Project) => {
     if (!apiOnlineRef.current) return project
@@ -179,8 +206,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   )
 
   const setPrompt = useCallback((next: PromptConfig) => {
-    setPromptState(next)
-    if (apiOnlineRef.current) void putPrompt(next)
+    const hydrated = { ...next, metrics: normalizeMetrics(next.metrics) }
+    setPromptState(hydrated)
+    if (apiOnlineRef.current) void putPrompt(hydrated)
   }, [])
 
   const resetPrompt = useCallback(() => {

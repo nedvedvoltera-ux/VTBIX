@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { BUDGET_FILTERS, COUNTRIES, FIT_FILTERS, INDUSTRIES, REGIONS_BY_COUNTRY, STATUS_FILTERS } from '../data/mock'
 import type { ConcessionFit, ProjectStatus } from '../types'
+import { applyRanking } from '../utils/concession'
 import { ProjectCard, type ProjectView } from '../components/ProjectCard'
 import { IconGrid, IconPlus, IconRows, IconSearch } from '../components/Icons'
 
@@ -18,7 +19,7 @@ function readView(): ProjectView {
 }
 
 export function ProjectsPage() {
-  const { projects } = useApp()
+  const { projects, prompt } = useApp()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'all' | ProjectStatus>('all')
   const [fit, setFit] = useState<'all' | ConcessionFit>('all')
@@ -40,10 +41,15 @@ export function ProjectsPage() {
 
   const regions = country === 'all' ? [] : (REGIONS_BY_COUNTRY[country] ?? [])
 
+  const rankedProjects = useMemo(
+    () => projects.map((project) => applyRanking(project, prompt.metrics)),
+    [projects, prompt.metrics],
+  )
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     const range = BUDGET_FILTERS.find((item) => item.id === budget)
-    const ranked = projects.filter((project) => {
+    const ranked = rankedProjects.filter((project) => {
       if (status !== 'all' && project.status !== status) return false
       if (fit !== 'all' && project.concessionFit !== fit) return false
       if (industry !== 'all' && project.industry !== industry) return false
@@ -58,14 +64,14 @@ export function ProjectsPage() {
       return blob.includes(q)
     })
     return [...ranked].sort((a, b) => (b.concessionScore ?? -1) - (a.concessionScore ?? -1))
-  }, [projects, query, status, fit, industry, country, region, budget])
+  }, [rankedProjects, query, status, fit, industry, country, region, budget])
 
   const stats = useMemo(() => {
-    const advantageous = projects.filter((p) => p.concessionFit === 'advantageous').length
-    const average = projects.filter((p) => p.concessionFit === 'average').length
-    const unfavorable = projects.filter((p) => p.concessionFit === 'unfavorable').length
+    const advantageous = rankedProjects.filter((p) => p.concessionFit === 'advantageous').length
+    const average = rankedProjects.filter((p) => p.concessionFit === 'average').length
+    const unfavorable = rankedProjects.filter((p) => p.concessionFit === 'unfavorable').length
     return { advantageous, average, unfavorable }
-  }, [projects])
+  }, [rankedProjects])
 
   function resetFilters() {
     setQuery('')
@@ -84,8 +90,8 @@ export function ProjectsPage() {
           <p className="eyebrow">Объекты анализа</p>
           <h1>Ранжирование концессий</h1>
           <p className="lede">
-            Система ищет выгодные концессионные соглашения для концессионера. Загруженные проекты автоматически
-            ранжируются по предсказанной выгодности: слева приоритет, статус расчёта сдвинут правее.
+            Система ищет выгодные концессионные соглашения для концессионера. Порядок задают веса метрик в мастере
+            промпта и баллы по этим метрикам в карточке проекта.
           </p>
         </div>
         <Link to="/projects/new" className="btn btn--primary">

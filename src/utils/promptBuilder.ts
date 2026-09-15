@@ -62,7 +62,11 @@ export function buildPromptPreview(config: PromptConfig, sample?: Project | null
     'Обязательные разделы:',
     ...enabled.map((section, index) => `${index + 1}. ${section.title} — ${section.hint}`),
     '',
-    `Обязательные метрики: ${config.metrics.join(', ') || 'не заданы'}. Если метрика не считается из файла — укажи «недостаточно данных» и не выдумывай точность.`,
+    `Обязательные метрики (вес = вклад в ранжирование выгодности): ${
+      config.metrics.length
+        ? config.metrics.map((item) => `${item.name} — вес ${item.weight}`).join(', ')
+        : 'не заданы'
+    }. Для каждой метрики укажи значение и балл привлекательности для концессионера от 0 до 100. Если метрика не считается из файла — укажи «недостаточно данных» и не выдумывай точность. Итоговый рейтинг объекта — взвешенное среднее баллов по заданным весам.`,
     '',
     config.extraInstructions ? `Особые указания:\n${config.extraInstructions}` : '',
     projectBlock,
