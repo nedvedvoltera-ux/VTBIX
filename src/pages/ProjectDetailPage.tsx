@@ -8,6 +8,7 @@ import { IconFile, IconIndustry, IconPin, IconWallet } from '../components/Icons
 import type { AnalyticalNote, Project } from '../types'
 import { computeRanking } from '../utils/concession'
 import { analyzeProject } from '../api/client'
+import { markdownSummary, markdownWasBuilt, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function NoteView({ note, project }: { note: AnalyticalNote; project: Project }) {
   return (
@@ -301,8 +302,18 @@ export function ProjectDetailPage() {
           )}
 
           {project.markdownPreview && (
-            <details className="markdown-preview">
-              <summary>Markdown документа (Docling)</summary>
+            <details className="markdown-preview" open={project.status === 'error'}>
+              <summary>
+                Markdown документа (Docling) · {markdownSummary(project)}
+                {markdownWasBuilt(project) && (
+                  <>
+                    {' · '}
+                    <a href={`/api/projects/${project.id}/markdown`} download={`${project.id}.md`}>
+                      скачать .md
+                    </a>
+                  </>
+                )}
+              </summary>
               <pre>{project.markdownPreview}</pre>
             </details>
           )}
@@ -319,11 +330,9 @@ export function ProjectDetailPage() {
           {project.status === 'error' && (
             <div className="banner banner--danger">
               <div>
-                <strong>Расчёт остановился</strong>
-                <p>
-                  {project.pipelineMessage ||
-                    'Не удалось прочитать документ через Docling или извлечь параметры моделью. Повторите или поправьте файл.'}
-                </p>
+                <strong>{pipelineErrorTitle(project)}</strong>
+                <p>{project.pipelineMessage || 'Не удалось завершить разбор. Смотрите этап в тексте ошибки.'}</p>
+                <p className="hint">{markdownSummary(project)}</p>
               </div>
             </div>
           )}

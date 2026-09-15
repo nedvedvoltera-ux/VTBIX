@@ -104,23 +104,36 @@ function startPipelineJob({ jobId, project, filePath, fileName, notes, prompt })
         },
       })
     } catch (error) {
+      const current = getProject(project.id) || latest
+      const failedAt =
+        error?.failedAt ||
+        (current.markdownReady || current.markdownPreview ? 'extracting' : 'converting')
+      const markdownPreview = error?.markdownPreview || current.markdownPreview
       const message = error instanceof Error ? error.message : String(error)
+      console.error(`[job ${jobId}] ${message}`)
       const failed = saveProject({
-        ...(getProject(project.id) || latest),
+        ...current,
         status: 'error',
         pipelineStage: 'error',
+        pipelineFailedAt: failedAt,
         pipelineMessage: message,
+        markdownPreview,
+        markdownReady: Boolean(markdownPreview),
+        markdownChars: error?.markdownChars || current.markdownChars,
         updatedAt: nowIso(),
       })
       finishJob(jobId, {
         status: 'error',
         extracted_json: null,
-        response_json: null,
+        response_json: JSON.stringify({
+          failedAt,
+          markdownPath: error?.markdownPath || (current.markdownPreview ? 'saved' : null),
+        }),
         error: message,
         finished_at: nowIso(),
       })
-      updateJob(jobId, { stage: 'error' })
-      emitJob(jobId, 'failed', { message, project: failed })
+      updateJob(jobId, { stage: 'error', markdown_path: error?.markdownPath || undefined })
+      emitJob(jobId, 'failed', { message, project: failed, failedAt })
       closeJobStream(jobId)
     }
   })()
@@ -288,6 +301,26 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     prompt,
   })
   res.json({ project: next, job: getJob(jobId) })
+})
+
+app.get('/api/projects/:id/markdown', (req, res) => {
+  const jobs = listJobs(req.params.id)
+  const withMd = jobs.find((item) => item.markdownPath && fs.existsSync(item.markdownPath))
+  if (withMd) {
+    res.type('text/markdown; charset=utf-8')
+    res.send(fs.readFileSync(withMd.markdownPath, 'utf8'))
+    return
+  }
+  const project = getProject(req.params.id)
+  if (project?.markdownPreview) {
+    res.type('text/markdown; charset=utf-8')
+    res.send(project.markdownPreview)
+    return
+  }
+  res.status(404).json({
+    error: 'markdown_not_ready',
+    message: 'Markdown не создан — ошибка случилась на этапе Docling, до модели.',
+  })
 })
 
 app.get('/api/projects/:id/jobs', (req, res) => {

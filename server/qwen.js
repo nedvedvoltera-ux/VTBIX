@@ -1,4 +1,5 @@
 import { config } from './config.js'
+import { describeNetworkError, fetchOrThrow } from './httpErrors.js'
 import { extractJsonObject, stripThink } from './jsonRepair.js'
 
 async function readSseContent(response, onDelta) {
@@ -59,12 +60,16 @@ async function chat(messages, { stream, signal, jsonMode, extras = true }) {
     body.chat_template_kwargs = { enable_thinking: false }
   }
 
-  const response = await fetch(`${config.llmApiUrl}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  })
+  const response = await fetchOrThrow(
+    `${config.llmApiUrl}/chat/completions`,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    },
+    'Qwen',
+  )
   return response
 }
 
@@ -122,13 +127,14 @@ export async function pingLlm() {
       headers,
       signal: AbortSignal.timeout(2500),
     })
-    return { ok: response.ok, configured: true, model: config.llmModel }
+    return { ok: response.ok, configured: true, model: config.llmModel, url: config.llmApiUrl }
   } catch (error) {
     return {
       ok: false,
       configured: true,
       model: config.llmModel,
-      error: error instanceof Error ? error.message : String(error),
+      url: config.llmApiUrl,
+      error: describeNetworkError(error, { service: 'Qwen', url: `${config.llmApiUrl}/models` }),
     }
   }
 }

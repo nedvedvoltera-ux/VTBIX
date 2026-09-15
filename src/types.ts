@@ -73,8 +73,11 @@ export type Project = {
   concessionScore?: number
   note?: AnalyticalNote
   pipelineStage?: 'converting' | 'extracting' | 'done' | 'error'
+  pipelineFailedAt?: 'converting' | 'extracting'
   pipelineMessage?: string
   markdownPreview?: string
+  markdownReady?: boolean
+  markdownChars?: number
 }
 
 export type PromptSectionId =

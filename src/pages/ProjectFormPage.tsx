@@ -7,6 +7,7 @@ import { analyzeProject, jobStreamUrl, uploadProjectFile } from '../api/client'
 import { IconFile, IconSpark, IconUpload } from '../components/Icons'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
 import type { Project } from '../types'
+import { markdownSummary, markdownWasBuilt, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function stageNotice(project: Project, fallback: string) {
   if (project.pipelineMessage) return project.pipelineMessage
@@ -290,8 +291,18 @@ export function ProjectFormPage() {
           )}
 
           {form.markdownPreview && (
-            <details className="markdown-preview">
-              <summary>Markdown документа</summary>
+            <details className="markdown-preview" open={form.status === 'error'}>
+              <summary>
+                {markdownSummary(form)}
+                {markdownWasBuilt(form) && (
+                  <>
+                    {' · '}
+                    <a href={`/api/projects/${form.id}/markdown`} download={`${form.id}.md`}>
+                      скачать .md
+                    </a>
+                  </>
+                )}
+              </summary>
               <pre>{form.markdownPreview}</pre>
             </details>
           )}
@@ -315,7 +326,13 @@ export function ProjectFormPage() {
             </span>
           </div>
           {notice && <p className="callout">{notice}</p>}
-          {error && <p className="callout callout--danger">{error}</p>}
+          {error && (
+            <div className="callout callout--danger">
+              <strong>{pipelineErrorTitle(form)}</strong>
+              <p>{error}</p>
+              <p>{markdownSummary(form)}</p>
+            </div>
+          )}
           <ProjectCardFields form={form} patch={patch} />
           <div className="actions">
             <button type="submit" className="btn">

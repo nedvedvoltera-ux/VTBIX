@@ -509,6 +509,9 @@ p { margin: 0; }
   line-height: 1.45;
 }
 .callout--danger { background: #f8e8e6; color: var(--danger); }
+.callout strong { display: block; margin-bottom: 4px; }
+.callout p { margin: 6px 0 0; }
+.markdown-preview a { color: var(--teal); }
 .pill {
   font-size: 11px;
   font-weight: 800;

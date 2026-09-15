@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { config } from './config.js'
+import { describeNetworkError, fetchOrThrow } from './httpErrors.js'
 
 const MIME = {
   '.pdf': 'application/pdf',
@@ -71,12 +72,16 @@ function taskStatus(payload) {
 
 async function convertSync(filePath, fileName) {
   const form = await buildForm(filePath, fileName)
-  const response = await fetch(`${config.doclingUrl}/v1/convert/file`, {
-    method: 'POST',
-    body: form,
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(config.doclingTimeoutMs),
-  })
+  const response = await fetchOrThrow(
+    `${config.doclingUrl}/v1/convert/file`,
+    {
+      method: 'POST',
+      body: form,
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(config.doclingTimeoutMs),
+    },
+    'Docling',
+  )
   if (!response.ok) {
     const body = await response.text().catch(() => '')
     throw new Error(`Docling ${response.status}: ${body.slice(0, 400) || response.statusText}`)
@@ -88,9 +93,10 @@ async function pollTask(taskId, onProgress) {
   const started = Date.now()
   let ticks = 0
   while (Date.now() - started < config.doclingTimeoutMs) {
-    const response = await fetch(
+    const response = await fetchOrThrow(
       `${config.doclingUrl}/v1/status/poll/${encodeURIComponent(taskId)}?wait=5`,
       { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) },
+      'Docling',
     )
     if (!response.ok) {
       const body = await response.text().catch(() => '')
@@ -131,12 +137,16 @@ export async function convertToMarkdown({ filePath, fileName, onProgress }) {
   })
 
   const form = await buildForm(filePath, fileName)
-  const queued = await fetch(`${config.doclingUrl}/v1/convert/file/async`, {
-    method: 'POST',
-    body: form,
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(60_000),
-  })
+  const queued = await fetchOrThrow(
+    `${config.doclingUrl}/v1/convert/file/async`,
+    {
+      method: 'POST',
+      body: form,
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(60_000),
+    },
+    'Docling',
+  )
 
   let payload
   if (queued.status === 404) {
@@ -151,10 +161,14 @@ export async function convertToMarkdown({ filePath, fileName, onProgress }) {
       payload = accepted?.document ? accepted : await convertSync(filePath, fileName)
     } else {
       await pollTask(id, onProgress)
-      const result = await fetch(`${config.doclingUrl}/v1/result/${encodeURIComponent(id)}`, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(60_000),
-      })
+      const result = await fetchOrThrow(
+        `${config.doclingUrl}/v1/result/${encodeURIComponent(id)}`,
+        {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(60_000),
+        },
+        'Docling',
+      )
       if (!result.ok) {
         const body = await result.text().catch(() => '')
         throw new Error(`Docling result ${result.status}: ${body.slice(0, 400) || result.statusText}`)
@@ -174,10 +188,15 @@ export async function pingDocling() {
   if (!config.doclingUrl) return { ok: false, configured: false }
   try {
     const response = await fetch(`${config.doclingUrl}/health`, { signal: AbortSignal.timeout(2500) })
-    if (response.ok) return { ok: true, configured: true }
+    if (response.ok) return { ok: true, configured: true, url: config.doclingUrl }
     const fallback = await fetch(`${config.doclingUrl}/docs`, { signal: AbortSignal.timeout(2500) })
     return { ok: fallback.ok, configured: true }
   } catch (error) {
-    return { ok: false, configured: true, error: error instanceof Error ? error.message : String(error) }
+    return {
+      ok: false,
+      configured: true,
+      url: config.doclingUrl,
+      error: describeNetworkError(error, { service: 'Docling', url: `${config.doclingUrl}/health` }),
+    }
   }
 }
