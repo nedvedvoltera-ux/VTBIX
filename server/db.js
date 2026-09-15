@@ -96,6 +96,40 @@ export function saveProject(project) {
   return hydrateProjectDocuments(JSON.parse(payload))
 }
 
+export function deleteProject(id) {
+  db.prepare('DELETE FROM llm_jobs WHERE project_id = ?').run(id)
+  db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+}
+
+const SEED_PROJECT_IDS = [
+  'p-tec5',
+  'p-vostok',
+  'p-chernozem',
+  'p-north-dc',
+  'p-pharma-kzn',
+  'p-gok',
+  'p-astana-hub',
+  'p-minsk-plant',
+  'p-smoke',
+]
+
+export function purgeSeedProjects() {
+  const delJobs = db.prepare('DELETE FROM llm_jobs WHERE project_id = ?')
+  const delProject = db.prepare('DELETE FROM projects WHERE id = ?')
+  const run = db.transaction((ids) => {
+    let removed = 0
+    for (const id of ids) {
+      delJobs.run(id)
+      removed += delProject.run(id).changes
+    }
+    return removed
+  })
+  return run(SEED_PROJECT_IDS)
+}
+
+const removedSeeds = purgeSeedProjects()
+if (removedSeeds) console.log(`[db] removed ${removedSeeds} mock seed projects`)
+
 export function patchProject(id, patch) {
   const current = getProject(id)
   if (!current) return null

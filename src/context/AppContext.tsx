@@ -1,7 +1,7 @@
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiHealth, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
-import { DEFAULT_PROMPT } from '../data/mock'
+import { DEFAULT_PROMPT, SEED_PROJECT_IDS } from '../data/mock'
 import type { Project, PromptConfig } from '../types'
 import { hydratePrompt, normalizeMetrics } from '../utils/concession'
 import { uid } from '../utils/format'
@@ -30,12 +30,12 @@ function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-function hydrateProject(project: Project): Project {
-  return project
+function isRealProject(project: Project) {
+  return !SEED_PROJECT_IDS.has(project.id)
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [projects, setProjects] = useState<Project[]>(() => readJson<Project[]>(PROJECTS_KEY, []).map(hydrateProject))
+  const [projects, setProjects] = useState<Project[]>(() => readJson<Project[]>(PROJECTS_KEY, []).filter(isRealProject))
   const [prompt, setPromptState] = useState<PromptConfig>(() => hydratePrompt(readJson(PROMPT_KEY, DEFAULT_PROMPT), DEFAULT_PROMPT))
   const [apiOnline, setApiOnline] = useState(false)
   const apiOnlineRef = useRef(false)
@@ -52,7 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const remote = await fetchProjects()
         const remotePrompt = await fetchPrompt()
         if (cancelled) return
-        setProjects(remote.map(hydrateProject))
+        setProjects(remote.filter(isRealProject))
         if (remotePrompt) setPromptState(hydratePrompt(remotePrompt, DEFAULT_PROMPT))
         else await putPrompt(DEFAULT_PROMPT)
       } catch {
@@ -79,7 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!apiOnline) return undefined
     const timer = window.setInterval(() => {
       void fetchProjects()
-        .then((remote) => setProjects(remote.map(hydrateProject)))
+        .then((remote) => setProjects(remote.filter(isRealProject)))
         .catch(() => undefined)
     }, hasProcessing ? 1000 : 2500)
     return () => window.clearInterval(timer)
@@ -88,7 +88,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const persist = useCallback(async (project: Project) => {
     if (!apiOnlineRef.current) return project
     try {
-      return hydrateProject(await putProject(project))
+      return await putProject(project)
     } catch {
       return project
     }

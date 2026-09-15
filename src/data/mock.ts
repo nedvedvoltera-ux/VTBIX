@@ -348,3 +348,5 @@ export const INITIAL_PROJECTS: Project[] = [
     owner: 'Н. Фадеева',
   },
 ]
+
+export const SEED_PROJECT_IDS = new Set(INITIAL_PROJECTS.map((item) => item.id))
