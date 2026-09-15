@@ -45,7 +45,7 @@ const thinkingRaw = (process.env.SUMMARY_ENABLE_THINKING || process.env.LLM_ENAB
 export const config = {
   port: num('PORT', 8080),
   doclingUrl: (process.env.DOCLING_URL || '').replace(/\/$/, ''),
-  doclingTimeoutMs: num('DOCLING_TIMEOUT_MS', 180_000),
+  doclingTimeoutMs: num('DOCLING_TIMEOUT_MS', 900_000),
   doclingTableMode: process.env.DOCLING_TABLE_MODE || 'accurate',
   llmApiUrl: normalizeLlmBase(summaryUrl),
   llmApiKey: process.env.SUMMARY_API_KEY || process.env.LLM_API_KEY || '',

@@ -3,14 +3,14 @@ name: vtbih
 services:
   api:
     build: .
-    image: vtbih-api:1.1.0
+    image: vtbih-api:1.1.1
     ports:
       - "8080:8080"
     environment:
       PORT: 8080
       DATA_DIR: /app/data
       DOCLING_URL: ${DOCLING_URL:-http://docling:5001}
-      DOCLING_TIMEOUT_MS: ${DOCLING_TIMEOUT_MS:-180000}
+      DOCLING_TIMEOUT_MS: "900000"
       DOCLING_TABLE_MODE: ${DOCLING_TABLE_MODE:-accurate}
       SUMMARY_API_BASE_URL: ${SUMMARY_API_BASE_URL:-http://192.168.215.74:9080/v1}
       SUMMARY_MODEL: ${SUMMARY_MODEL:-Qwen/Qwen3.5-35B-A3B-FP8}
@@ -35,6 +35,7 @@ services:
       - "5001:5001"
     environment:
       DOCLING_SERVE_ENABLE_UI: "0"
+      DOCLING_SERVE_MAX_SYNC_WAIT: "900"
     shm_size: "1gb"
     restart: unless-stopped
 

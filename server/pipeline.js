@@ -49,7 +49,11 @@ export async function runDocumentPipeline({ project, filePath, fileName, notes, 
 
     let markdown
     try {
-      markdown = await convertToMarkdown({ filePath, fileName })
+      markdown = await convertToMarkdown({
+        filePath,
+        fileName,
+        onProgress,
+      })
     } catch (error) {
       if (config.doclingUrl || /\.(csv|md|txt)$/i.test(fileName)) throw error
       markdown = [`# ${fileName}`, '', 'Docling не настроен. Ниже — имя файла и пояснения.', notes || ''].join('\n')
