@@ -43,14 +43,14 @@ async function readSseContent(response, onDelta) {
   return content
 }
 
-async function chat(messages, { stream, signal, jsonMode, extras = true }) {
+async function chat(messages, { stream, signal, jsonMode, extras = true, maxTokens } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (config.llmApiKey) headers.Authorization = `Bearer ${config.llmApiKey}`
 
   const body = {
     model: config.llmModel,
     temperature: config.llmTemperature,
-    max_tokens: config.llmMaxTokens,
+    max_tokens: maxTokens || config.llmMaxTokens,
     messages,
     stream,
   }
@@ -127,7 +127,17 @@ export async function pingLlm() {
       headers,
       signal: AbortSignal.timeout(2500),
     })
-    return { ok: response.ok, configured: true, model: config.llmModel, url: config.llmApiUrl }
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      return {
+        ok: false,
+        configured: true,
+        model: config.llmModel,
+        url: config.llmApiUrl,
+        error: `Qwen ${response.status}: ${body.slice(0, 200) || response.statusText}`,
+      }
+    }
+    return { ok: true, configured: true, model: config.llmModel, url: config.llmApiUrl }
   } catch (error) {
     return {
       ok: false,
@@ -137,4 +147,114 @@ export async function pingLlm() {
       error: describeNetworkError(error, { service: 'Qwen', url: `${config.llmApiUrl}/models` }),
     }
   }
+}
+
+const PROBE_TTL_MS = 30_000
+const PROBE_TIMEOUT_MS = 20_000
+let lastProbe = null
+let probeInFlight = null
+
+export function getLastLlmProbe() {
+  return lastProbe
+}
+
+function storeProbe(probe) {
+  lastProbe = probe
+  return probe
+}
+
+async function runLlmProbe() {
+  const checkedAt = new Date().toISOString()
+  if (!config.llmApiUrl) {
+    return storeProbe({
+      ok: false,
+      configured: false,
+      model: config.llmModel,
+      error: 'SUMMARY_API_BASE_URL не задан — тестовый запрос не отправлен',
+      checkedAt,
+    })
+  }
+
+  const started = Date.now()
+  const url = `${config.llmApiUrl}/chat/completions`
+  const messages = [{ role: 'user', content: 'Ответь строго одним словом: PONG' }]
+
+  try {
+    let response = await chat(messages, {
+      stream: false,
+      jsonMode: false,
+      extras: true,
+      maxTokens: 24,
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (response.status === 400) {
+      response = await chat(messages, {
+        stream: false,
+        jsonMode: false,
+        extras: false,
+        maxTokens: 24,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      })
+    }
+
+    const latencyMs = Date.now() - started
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      const probe = storeProbe({
+        ok: false,
+        configured: true,
+        model: config.llmModel,
+        url: config.llmApiUrl,
+        latencyMs,
+        error: `Qwen ${response.status}: ${body.slice(0, 240) || response.statusText}`,
+        checkedAt: new Date().toISOString(),
+      })
+      console.warn(`[llm probe] fail ${probe.error}`)
+      return probe
+    }
+
+    const payload = await response.json()
+    const reply = stripThink(String(payload?.choices?.[0]?.message?.content || '')).trim()
+    const probe = storeProbe({
+      ok: Boolean(reply),
+      configured: true,
+      model: config.llmModel,
+      url: config.llmApiUrl,
+      latencyMs,
+      reply: reply.slice(0, 80),
+      matched: /pong/i.test(reply),
+      error: reply ? undefined : 'модель вернула пустой ответ',
+      checkedAt: new Date().toISOString(),
+    })
+    console.log(
+      probe.ok
+        ? `[llm probe] ok ${latencyMs}ms ${probe.reply}`
+        : `[llm probe] fail ${probe.error}`,
+    )
+    return probe
+  } catch (error) {
+    const probe = storeProbe({
+      ok: false,
+      configured: true,
+      model: config.llmModel,
+      url: config.llmApiUrl,
+      latencyMs: Date.now() - started,
+      error: describeNetworkError(error, { service: 'Qwen', url }),
+      checkedAt: new Date().toISOString(),
+    })
+    console.warn(`[llm probe] fail ${probe.error}`)
+    return probe
+  }
+}
+
+export async function probeLlm({ force = false } = {}) {
+  if (!force && lastProbe?.checkedAt) {
+    const age = Date.now() - Date.parse(lastProbe.checkedAt)
+    if (Number.isFinite(age) && age < PROBE_TTL_MS) return { ...lastProbe, cached: true }
+  }
+  if (probeInFlight) return probeInFlight
+  probeInFlight = runLlmProbe().finally(() => {
+    probeInFlight = null
+  })
+  return probeInFlight
 }

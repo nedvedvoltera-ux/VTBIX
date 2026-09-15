@@ -11,12 +11,72 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type ServicePing = {
+  ok: boolean
+  configured?: boolean
+  error?: string
+  url?: string
+  model?: string
+}
+
+export type LlmProbe = {
+  ok: boolean
+  configured: boolean
+  model?: string
+  url?: string
+  latencyMs?: number
+  reply?: string
+  matched?: boolean
+  error?: string
+  checkedAt?: string
+  cached?: boolean
+}
+
+export type PipelineHealth = {
+  ok: boolean
+  pipeline: {
+    docling: ServicePing
+    llm: ServicePing
+    llmProbe: LlmProbe | null
+    model: string
+  }
+}
+
 export async function apiHealth(): Promise<boolean> {
   try {
     const data = await request<{ ok: boolean }>('/health')
     return Boolean(data.ok)
   } catch {
     return false
+  }
+}
+
+export async function fetchHealth(): Promise<PipelineHealth | null> {
+  try {
+    const response = await fetch(`${API}/health`)
+    if (!response.ok) return null
+    return (await response.json()) as PipelineHealth
+  } catch {
+    return null
+  }
+}
+
+export async function probeLlm(force = false): Promise<LlmProbe> {
+  try {
+    const response = await fetch(`${API}/health/llm${force ? '?refresh=1' : ''}`)
+    const data = (await response.json().catch(() => ({}))) as LlmProbe
+    return {
+      ...data,
+      ok: Boolean(data.ok),
+      configured: Boolean(data.configured),
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      error: error instanceof Error ? error.message : 'не удалось вызвать /api/health/llm',
+      checkedAt: new Date().toISOString(),
+    }
   }
 }
 

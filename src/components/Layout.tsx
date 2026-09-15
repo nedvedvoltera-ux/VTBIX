@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useState } from 'react'
 import { IconChevron, IconClose, IconGrid, IconMenu, IconRank, IconSliders } from './Icons'
 import { useApp } from '../context/AppContext'
+import { PipelineStatus } from './PipelineStatus'
 
 const SIDEBAR_KEY = 'vtbih.sidebarCollapsed'
 
@@ -100,7 +101,7 @@ export function Layout() {
                 ? 'Рейтинг регионов'
                 : 'Концессии'}
           </div>
-          <span className="topbar__env">{apiOnline ? 'API' : 'лок. кэш'}</span>
+          <PipelineStatus apiOnline={apiOnline} />
         </header>
         <div className="content">
           <Outlet />

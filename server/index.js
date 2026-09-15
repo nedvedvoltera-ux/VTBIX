@@ -24,7 +24,7 @@ import {
 import { pingDocling } from './docling.js'
 import { closeJobStream, emitJob, subscribeJob } from './events.js'
 import { completeProcessing } from './llm.js'
-import { pingLlm } from './qwen.js'
+import { getLastLlmProbe, pingLlm, probeLlm } from './qwen.js'
 import { abortPipeline, mergeProjectProgress, runDocumentPipeline, runningPipelines } from './pipeline.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -148,9 +148,16 @@ app.get('/api/health', async (_req, res) => {
     pipeline: {
       docling,
       llm,
+      llmProbe: getLastLlmProbe(),
       model: config.llmModel,
     },
   })
+})
+
+app.get('/api/health/llm', async (req, res) => {
+  const force = req.query.refresh === '1' || req.query.force === '1'
+  const probe = await probeLlm({ force })
+  res.json(probe)
 })
 
 app.get('/api/projects', (_req, res) => {
@@ -393,4 +400,15 @@ setInterval(() => {
 app.listen(PORT, () => {
   console.log(`VTBIH API http://localhost:${PORT}`)
   console.log(`Docling ${config.doclingUrl || 'не задан'} · Qwen ${config.llmApiUrl || 'не задан'} · ${config.llmModel}`)
+  void probeLlm({ force: true }).then((probe) => {
+    if (!probe.configured) {
+      console.log('[llm probe] пропущен: SUMMARY_API_BASE_URL не задан')
+      return
+    }
+    console.log(
+      probe.ok
+        ? `[llm probe] работает (${probe.latencyMs} мс): ${probe.reply}`
+        : `[llm probe] не работает: ${probe.error}`,
+    )
+  })
 })
