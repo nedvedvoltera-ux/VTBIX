@@ -13,10 +13,12 @@ import {
   getJob,
   getProject,
   getPrompt,
+  initDb,
   insertJob,
   listJobs,
   listProjects,
   nowIso,
+  pingDb,
   saveProject,
   savePrompt,
   uid,
@@ -25,15 +27,69 @@ import {
 import { pingDocling } from './docling.js'
 import { combineDocumentsMarkdown, decodeOriginalName, readDocumentMarkdown, summarizeDocuments } from './documents.js'
 import { closeJobStream, emitJob, subscribeJob } from './events.js'
+import { publicLlmSettings, resolveLlmRuntime, saveLlmSettings } from './llmSettings.js'
+import {
+  convertHitToProject,
+  getPublicMediaConfig,
+  getPublicMediaHit,
+  getPublicMediaStatus,
+  listPublicMediaHits,
+  putPublicMediaConfig,
+  removeMediaHit,
+  resetMediaHits,
+  startMediaRun,
+  updatePublicMediaHit,
+} from './mediaMonitor.js'
+import {
+  addActivity,
+  addContact,
+  addPlan,
+  createDeal,
+  getPublicDeal,
+  listCrmSources,
+  listPublicDeals,
+  lookupDeal,
+  publicMailSettings,
+  removeActivity,
+  removeContact,
+  removeDeal,
+  removePlan,
+  saveMailSettings,
+  sendFromDeal,
+  testMailConnection,
+  updateContact,
+  updateDeal,
+  updatePlan,
+} from './crm.js'
 import { abortPipeline, mergeProjectProgress, runConvertDocuments, runExtractDocuments } from './pipeline.js'
-import { getLastLlmProbe, pingLlm, probeLlm } from './qwen.js'
+import { getLastLlmProbe, pingLlm, probeLlm, resetLlmProbe } from './qwen.js'
+import {
+  attachUser,
+  enforceAuth,
+  handleAcceptInvite,
+  handleAuthStatus,
+  handleCreateUser,
+  handleDeleteUser,
+  handleInviteInfo,
+  handleListUsers,
+  handleLogin,
+  handleLogout,
+  handlePatchUser,
+  handleSetup,
+  handleSystemGet,
+  handleSystemPut,
+  requireAdmin,
+  requireUsersAdmin,
+} from './auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = config.port
 const app = express()
 
-app.use(cors())
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json({ limit: '8mb' }))
+app.use(attachUser)
+app.use(enforceAuth)
 
 const storage = multer.diskStorage({
   destination(req, _file, cb) {
@@ -56,8 +112,9 @@ const upload = multer({
   },
 })
 
-function withJobPaths(project) {
-  const jobs = listJobs(project.id)
+async function withJobPaths(project) {
+  if (!project?.id) return project
+  const jobs = await listJobs(project.id)
   let documents = Array.isArray(project.documents) ? [...project.documents] : []
   documents = documents.map((doc) => {
     if (doc.filePath && fs.existsSync(doc.filePath)) {
@@ -107,13 +164,13 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
     () =>
       new Promise((resolve) => {
         void (async () => {
-          let latest = getProject(project.id) || project
+          let latest = (await getProject(project.id)) || project
           try {
             const onProgress = async (payload) => {
-              latest = getProject(project.id) || latest
-              const next = saveProject(mergeProjectProgress(latest, payload, getPrompt()))
+              latest = (await getProject(project.id)) || latest
+              const next = await saveProject(mergeProjectProgress(latest, payload, (await getPrompt()) || prompt))
               latest = next
-              updateJob(jobId, {
+              await updateJob(jobId, {
                 status: payload.stage === 'done' ? 'done' : 'running',
                 stage: payload.stage,
                 markdown_path: payload.document?.markdownPath || payload.markdownPath || undefined,
@@ -126,7 +183,7 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
                 project: next,
               })
               if (payload.stage === 'done') {
-                finishJob(jobId, {
+                await finishJob(jobId, {
                   status: 'done',
                   extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : null,
                   response_json: JSON.stringify({
@@ -147,14 +204,14 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
               await runConvertDocuments({ project: latest, documents, onProgress })
             } else {
               await runExtractDocuments({
-                project: withJobPaths(latest),
+                project: await withJobPaths(latest),
                 notes,
                 prompt,
                 onProgress,
               })
             }
           } catch (error) {
-            const current = getProject(project.id) || latest
+            const current = (await getProject(project.id)) || latest
             const failedAt =
               error?.failedAt ||
               (current.markdownReady || current.markdownPreview ? 'extracting' : 'converting')
@@ -167,7 +224,7 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
                 item.id === error.documentId ? { ...item, status: 'error', error: message } : item,
               )
             }
-            const failed = saveProject({
+            const failed = await saveProject({
               ...current,
               documents: documentsNext,
               ...summarizeDocuments(documentsNext),
@@ -180,7 +237,7 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
               markdownChars: error?.markdownChars || current.markdownChars,
               updatedAt: nowIso(),
             })
-            finishJob(jobId, {
+            await finishJob(jobId, {
               status: 'error',
               extracted_json: null,
               response_json: JSON.stringify({
@@ -190,7 +247,7 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
               error: message,
               finished_at: nowIso(),
             })
-            updateJob(jobId, { stage: 'error', markdown_path: error?.markdownPath || undefined })
+            await updateJob(jobId, { stage: 'error', markdown_path: error?.markdownPath || undefined })
             emitJob(jobId, 'failed', { message, project: failed, failedAt })
             closeJobStream(jobId)
           } finally {
@@ -202,17 +259,37 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
   jobChain.set(project.id, run)
 }
 
+app.get('/api/auth/status', handleAuthStatus)
+app.post('/api/auth/setup', handleSetup)
+app.post('/api/auth/login', handleLogin)
+app.post('/api/auth/logout', handleLogout)
+app.get('/api/auth/invite/:token', handleInviteInfo)
+app.post('/api/auth/invite/:token', handleAcceptInvite)
+
+app.get('/api/settings/system', handleSystemGet)
+app.put('/api/settings/system', handleSystemPut)
+
+app.get('/api/users', requireUsersAdmin, handleListUsers)
+app.post('/api/users', requireUsersAdmin, handleCreateUser)
+app.patch('/api/users/:id', requireUsersAdmin, handlePatchUser)
+app.delete('/api/users/:id', requireUsersAdmin, handleDeleteUser)
+
 app.get('/api/health', async (_req, res) => {
-  const [docling, llm] = await Promise.all([pingDocling(), pingLlm()])
-  res.json({
-    ok: true,
+  const [docling, llm, db] = await Promise.all([pingDocling(), pingLlm(), pingDb()])
+  const runtime = resolveLlmRuntime()
+  res.status(db.ok ? 200 : 503).json({
+    ok: db.ok,
     service: 'vtbih-api',
     dataDir: DATA_DIR,
+    db,
     pipeline: {
       docling,
       llm,
       llmProbe: getLastLlmProbe(),
-      model: config.llmModel,
+      model: runtime.model,
+      source: runtime.source,
+      label: runtime.label,
+      provider: runtime.provider,
     },
   })
 })
@@ -223,33 +300,33 @@ app.get('/api/health/llm', async (req, res) => {
   res.json(probe)
 })
 
-app.get('/api/projects', (_req, res) => {
-  res.json(listProjects())
+app.get('/api/projects', async (_req, res) => {
+  res.json(await listProjects())
 })
 
-app.get('/api/projects/:id', (req, res) => {
-  const project = getProject(req.params.id)
+app.get('/api/projects/:id', async (req, res) => {
+  const project = await getProject(req.params.id)
   if (!project) return res.status(404).json({ error: 'not_found' })
   res.json(project)
 })
 
-app.put('/api/projects/:id', (req, res) => {
-  const project = saveProject({ ...req.body, id: req.params.id })
+app.put('/api/projects/:id', async (req, res) => {
+  const project = await saveProject({ ...req.body, id: req.params.id })
   res.json(project)
 })
 
-app.delete('/api/projects/:id', (req, res) => {
-  const project = getProject(req.params.id)
+app.delete('/api/projects/:id', async (req, res) => {
+  const project = await getProject(req.params.id)
   if (!project) return res.status(404).json({ error: 'not_found', message: 'Проект не найден' })
   abortPipeline(req.params.id)
-  deleteProject(req.params.id)
+  await deleteProject(req.params.id)
   res.json({ ok: true, id: req.params.id })
 })
 
-app.post('/api/projects', (req, res) => {
+app.post('/api/projects', async (req, res) => {
   const id = req.body?.id || uid('p')
   const now = nowIso()
-  const project = saveProject({
+  const project = await saveProject({
     status: 'draft',
     progress: 0,
     extractedByLlm: false,
@@ -266,101 +343,105 @@ app.post('/api/projects', (req, res) => {
 app.post('/api/projects/:id/file', (req, res) => {
   upload.any()(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message })
-    const files = (req.files || []).filter((item) => item.fieldname === 'file' || item.fieldname === 'files')
-    if (!files.length) return res.status(400).json({ error: 'file_required' })
+    void (async () => {
+      const files = (req.files || []).filter((item) => item.fieldname === 'file' || item.fieldname === 'files')
+      if (!files.length) return res.status(400).json({ error: 'file_required' })
 
-    let project = getProject(req.params.id)
-    const now = nowIso()
-    if (!project) {
-      project = saveProject({
-        id: req.params.id,
-        name: '',
-        fileName: null,
-        fileSize: null,
-        documents: [],
-        notes: req.body.notes || '',
-        industry: '',
-        country: '',
-        region: '',
-        budget: null,
-        status: 'draft',
-        progress: 0,
-        createdAt: now,
+      let project = await getProject(req.params.id)
+      const now = nowIso()
+      if (!project) {
+        project = await saveProject({
+          id: req.params.id,
+          name: '',
+          fileName: null,
+          fileSize: null,
+          documents: [],
+          notes: req.body.notes || '',
+          industry: '',
+          country: '',
+          region: '',
+          budget: null,
+          status: 'draft',
+          progress: 0,
+          createdAt: now,
+          updatedAt: now,
+          extractedByLlm: false,
+          owner: 'Вы',
+        })
+      }
+
+      const notes = req.body.notes || project.notes || ''
+      const incoming = files.map((file) => ({
+        id: uid('doc'),
+        fileName: decodeOriginalName(file.originalname),
+        fileSize: file.size,
+        filePath: file.path,
+        status: 'converting',
+        markdownReady: false,
+        uploadedAt: now,
+      }))
+      const documents = [...(project.documents || []), ...incoming]
+      const prompt = await getPrompt()
+      const jobId = uid('job')
+      const next = await saveProject({
+        ...project,
+        documents,
+        ...summarizeDocuments(documents),
+        notes,
+        status: 'processing',
+        progress: 5,
+        pipelineStage: 'converting',
+        pipelineMessage:
+          incoming.length > 1
+            ? `Принято ${incoming.length} файла. Docling готовит Markdown…`
+            : 'Файл принят. Docling готовит Markdown…',
         updatedAt: now,
-        extractedByLlm: false,
-        owner: 'Вы',
       })
-    }
 
-    const notes = req.body.notes || project.notes || ''
-    const incoming = files.map((file) => ({
-      id: uid('doc'),
-      fileName: decodeOriginalName(file.originalname),
-      fileSize: file.size,
-      filePath: file.path,
-      status: 'converting',
-      markdownReady: false,
-      uploadedAt: now,
-    }))
-    const documents = [...(project.documents || []), ...incoming]
-    const prompt = getPrompt()
-    const jobId = uid('job')
-    const next = saveProject({
-      ...project,
-      documents,
-      ...summarizeDocuments(documents),
-      notes,
-      status: 'processing',
-      progress: 5,
-      pipelineStage: 'converting',
-      pipelineMessage:
-        incoming.length > 1
-          ? `Принято ${incoming.length} файла. Docling готовит Markdown…`
-          : 'Файл принят. Docling готовит Markdown…',
-      updatedAt: now,
+      await insertJob({
+        id: jobId,
+        project_id: next.id,
+        status: 'running',
+        file_name: incoming.map((item) => item.fileName).join(', '),
+        file_path: incoming[0].filePath,
+        file_size: incoming.reduce((sum, item) => sum + item.fileSize, 0),
+        notes,
+        prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
+        extracted_json: null,
+        response_json: null,
+        error: null,
+        created_at: now,
+        finished_at: null,
+      })
+      await updateJob(jobId, { stage: 'converting' })
+      startPipelineJob({
+        jobId,
+        project: next,
+        mode: 'convert',
+        documents: incoming,
+        notes,
+        prompt,
+      })
+      res.json({ project: next, job: await getJob(jobId) })
+    })().catch((error) => {
+      if (!res.headersSent) res.status(500).json({ error: error instanceof Error ? error.message : String(error) })
     })
-
-    insertJob({
-      id: jobId,
-      project_id: next.id,
-      status: 'running',
-      file_name: incoming.map((item) => item.fileName).join(', '),
-      file_path: incoming[0].filePath,
-      file_size: incoming.reduce((sum, item) => sum + item.fileSize, 0),
-      notes,
-      prompt_snapshot: prompt ? JSON.stringify(prompt) : null,
-      extracted_json: null,
-      response_json: null,
-      error: null,
-      created_at: now,
-      finished_at: null,
-    })
-    updateJob(jobId, { stage: 'converting' })
-    startPipelineJob({
-      jobId,
-      project: next,
-      mode: 'convert',
-      documents: incoming,
-      notes,
-      prompt,
-    })
-    res.json({ project: next, job: getJob(jobId) })
   })
 })
 
-app.post('/api/projects/:id/analyze', (req, res) => {
-  const existing = getProject(req.params.id)
+app.post('/api/projects/:id/analyze', async (req, res) => {
+  const existing = await getProject(req.params.id)
   if (!existing) return res.status(404).json({ error: 'not_found' })
-  const project = withJobPaths(existing)
+  const project = await withJobPaths(existing)
   const ready = (project.documents || []).filter((item) => item.filePath || item.markdownReady || item.markdownPreview)
   if (!ready.length) {
     return res.status(400).json({ error: 'file_required', message: 'Сначала загрузите файлы проекта.' })
   }
 
   const notes = req.body?.notes || project.notes || ''
-  const prompt = getPrompt()
+  const prompt = await getPrompt()
   const jobId = uid('job')
-  const next = saveProject({
+  const next = await saveProject({
     ...project,
     notes,
     status: 'processing',
@@ -369,7 +450,7 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     pipelineMessage: `Отправляю ${ready.length} Markdown в Qwen…`,
     updatedAt: nowIso(),
   })
-  insertJob({
+  await insertJob({
     id: jobId,
     project_id: next.id,
     status: 'running',
@@ -384,7 +465,7 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     created_at: nowIso(),
     finished_at: null,
   })
-  updateJob(jobId, { stage: 'extracting' })
+  await updateJob(jobId, { stage: 'extracting' })
   startPipelineJob({
     jobId,
     project: next,
@@ -392,11 +473,11 @@ app.post('/api/projects/:id/analyze', (req, res) => {
     notes,
     prompt,
   })
-  res.json({ project: next, job: getJob(jobId) })
+  res.json({ project: next, job: await getJob(jobId) })
 })
 
-app.get('/api/projects/:id/markdown', (req, res) => {
-  const project = withJobPaths(getProject(req.params.id) || {})
+app.get('/api/projects/:id/markdown', async (req, res) => {
+  const project = await withJobPaths((await getProject(req.params.id)) || {})
   const combined = combineDocumentsMarkdown(project.documents || [])
   if (combined.trim()) {
     res.type('text/markdown; charset=utf-8')
@@ -414,8 +495,8 @@ app.get('/api/projects/:id/markdown', (req, res) => {
   })
 })
 
-app.get('/api/projects/:id/documents/:docId/markdown', (req, res) => {
-  const project = withJobPaths(getProject(req.params.id) || {})
+app.get('/api/projects/:id/documents/:docId/markdown', async (req, res) => {
+  const project = await withJobPaths((await getProject(req.params.id)) || {})
   const doc = (project.documents || []).find((item) => item.id === req.params.docId)
   if (!doc) return res.status(404).json({ error: 'not_found' })
   const body = readDocumentMarkdown(doc)
@@ -426,11 +507,11 @@ app.get('/api/projects/:id/documents/:docId/markdown', (req, res) => {
   res.send(body)
 })
 
-app.delete('/api/projects/:id/documents/:docId', (req, res) => {
-  const project = getProject(req.params.id)
+app.delete('/api/projects/:id/documents/:docId', async (req, res) => {
+  const project = await getProject(req.params.id)
   if (!project) return res.status(404).json({ error: 'not_found' })
   const documents = (project.documents || []).filter((item) => item.id !== req.params.docId)
-  const next = saveProject({
+  const next = await saveProject({
     ...project,
     documents,
     ...summarizeDocuments(documents),
@@ -439,33 +520,33 @@ app.delete('/api/projects/:id/documents/:docId', (req, res) => {
   res.json(next)
 })
 
-app.get('/api/projects/:id/jobs', (req, res) => {
-  res.json(listJobs(req.params.id))
+app.get('/api/projects/:id/jobs', async (req, res) => {
+  res.json(await listJobs(req.params.id))
 })
 
-app.get('/api/jobs', (_req, res) => {
-  res.json(listJobs())
+app.get('/api/jobs', async (_req, res) => {
+  res.json(await listJobs())
 })
 
-app.get('/api/jobs/:id', (req, res) => {
-  const job = getJob(req.params.id)
+app.get('/api/jobs/:id', async (req, res) => {
+  const job = await getJob(req.params.id)
   if (!job) return res.status(404).json({ error: 'not_found' })
   res.json(job)
 })
 
-app.get('/api/jobs/:id/stream', (req, res) => {
-  const job = getJob(req.params.id)
+app.get('/api/jobs/:id/stream', async (req, res) => {
+  const job = await getJob(req.params.id)
   if (!job) return res.status(404).json({ error: 'not_found' })
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
   res.setHeader('X-Accel-Buffering', 'no')
   if (typeof res.flushHeaders === 'function') res.flushHeaders()
-  res.write(`event: snapshot\ndata: ${JSON.stringify({ job, project: getProject(job.projectId) })}\n\n`)
+  res.write(`event: snapshot\ndata: ${JSON.stringify({ job, project: await getProject(job.projectId) })}\n\n`)
   subscribeJob(job.id, res)
   if (job.status === 'done' || job.status === 'error') {
     emitJob(job.id, job.status === 'done' ? 'done' : 'failed', {
-      project: getProject(job.projectId),
+      project: await getProject(job.projectId),
       extracted: job.extracted,
       message: job.error,
     })
@@ -473,12 +554,226 @@ app.get('/api/jobs/:id/stream', (req, res) => {
   }
 })
 
-app.get('/api/prompt', (_req, res) => {
-  res.json(getPrompt())
+app.get('/api/prompt', async (_req, res) => {
+  res.json(await getPrompt())
 })
 
-app.put('/api/prompt', (req, res) => {
-  res.json(savePrompt(req.body))
+app.put('/api/prompt', async (req, res) => {
+  res.json(await savePrompt(req.body))
+})
+
+app.get('/api/media/config', async (_req, res) => {
+  res.json(await getPublicMediaConfig())
+})
+
+app.put('/api/media/config', async (req, res) => {
+  res.json(await putPublicMediaConfig(req.body || {}))
+})
+
+app.get('/api/media/hits', async (_req, res) => {
+  res.json(await listPublicMediaHits())
+})
+
+app.get('/api/media/hits/:id', async (req, res) => {
+  const hit = await getPublicMediaHit(req.params.id)
+  if (!hit) return res.status(404).json({ error: 'not_found', message: 'Инфоповод не найден' })
+  res.json(hit)
+})
+
+app.patch('/api/media/hits/:id', async (req, res) => {
+  const hit = await updatePublicMediaHit(req.params.id, req.body || {})
+  if (!hit) return res.status(404).json({ error: 'not_found', message: 'Инфоповод не найден' })
+  res.json(hit)
+})
+
+app.post('/api/media/hits/:id/project', async (req, res) => {
+  const result = await convertHitToProject(req.params.id)
+  if (!result) return res.status(404).json({ error: 'not_found', message: 'Инфоповод не найден' })
+  res.status(result.existed ? 200 : 201).json(result)
+})
+
+app.delete('/api/media/hits/:id', async (req, res) => {
+  const ok = await removeMediaHit(req.params.id)
+  if (!ok) return res.status(404).json({ error: 'not_found', message: 'Инфоповод не найден' })
+  res.json({ ok: true, id: req.params.id })
+})
+
+app.delete('/api/media/hits', async (_req, res) => {
+  await resetMediaHits()
+  res.json({ ok: true })
+})
+
+app.get('/api/media/status', async (_req, res) => {
+  res.json(await getPublicMediaStatus())
+})
+
+function actorName(req) {
+  return req.authUser?.name || 'Вы'
+}
+
+function sendCrmError(res, err) {
+  const status = Number(err?.status) || 500
+  res.status(status).json({ error: err?.code || 'crm', message: err?.message || 'Ошибка CRM' })
+}
+
+app.get('/api/crm/deals', async (_req, res) => {
+  res.json(await listPublicDeals())
+})
+
+app.get('/api/crm/sources', async (_req, res) => {
+  res.json(await listCrmSources())
+})
+
+app.get('/api/crm/lookup', async (req, res) => {
+  res.json(await lookupDeal(req.query || {}))
+})
+
+app.post('/api/crm/deals', async (req, res) => {
+  try {
+    const result = await createDeal(req.body || {}, actorName(req))
+    res.status(result.existed ? 200 : 201).json(result)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.get('/api/crm/deals/:id', async (req, res) => {
+  const deal = await getPublicDeal(req.params.id)
+  if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+  res.json(deal)
+})
+
+app.patch('/api/crm/deals/:id', async (req, res) => {
+  const deal = await updateDeal(req.params.id, req.body || {})
+  if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+  res.json(deal)
+})
+
+app.delete('/api/crm/deals/:id', async (req, res) => {
+  const ok = await removeDeal(req.params.id)
+  if (!ok) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+  res.json({ ok: true, id: req.params.id })
+})
+
+app.post('/api/crm/deals/:id/contacts', async (req, res) => {
+  try {
+    const deal = await addContact(req.params.id, req.body || {})
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.status(201).json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.patch('/api/crm/deals/:id/contacts/:cid', async (req, res) => {
+  try {
+    const deal = await updateContact(req.params.id, req.params.cid, req.body || {})
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.delete('/api/crm/deals/:id/contacts/:cid', async (req, res) => {
+  try {
+    const deal = await removeContact(req.params.id, req.params.cid)
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.post('/api/crm/deals/:id/activities', async (req, res) => {
+  try {
+    const deal = await addActivity(req.params.id, req.body || {}, actorName(req))
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.status(201).json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.delete('/api/crm/deals/:id/activities/:aid', async (req, res) => {
+  const deal = await removeActivity(req.params.id, req.params.aid)
+  if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+  res.json(deal)
+})
+
+app.post('/api/crm/deals/:id/plans', async (req, res) => {
+  try {
+    const deal = await addPlan(req.params.id, req.body || {})
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.status(201).json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.patch('/api/crm/deals/:id/plans/:pid', async (req, res) => {
+  try {
+    const deal = await updatePlan(req.params.id, req.params.pid, req.body || {}, actorName(req))
+    if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.json(deal)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.delete('/api/crm/deals/:id/plans/:pid', async (req, res) => {
+  const deal = await removePlan(req.params.id, req.params.pid)
+  if (!deal) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+  res.json(deal)
+})
+
+app.post('/api/crm/deals/:id/email', async (req, res) => {
+  try {
+    const result = await sendFromDeal(req.params.id, req.body || {}, actorName(req))
+    if (!result) return res.status(404).json({ error: 'not_found', message: 'Карточка CRM не найдена' })
+    res.json(result)
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.get('/api/crm/mail', (_req, res) => {
+  res.json(publicMailSettings())
+})
+
+app.put('/api/crm/mail', requireAdmin, async (req, res) => {
+  res.json(await saveMailSettings(req.body || {}))
+})
+
+app.post('/api/crm/mail/test', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await testMailConnection())
+  } catch (err) {
+    sendCrmError(res, err)
+  }
+})
+
+app.post('/api/media/run', async (req, res) => {
+  try {
+    const job = await startMediaRun()
+    res.status(202).json({ job })
+  } catch (error) {
+    const status = error?.status || 500
+    res.status(status).json({
+      error: error?.code || 'media_run',
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+})
+
+app.get('/api/settings/llm', requireAdmin, (_req, res) => {
+  res.json(publicLlmSettings())
+})
+
+app.put('/api/settings/llm', requireAdmin, async (req, res) => {
+  await saveLlmSettings(req.body || {})
+  resetLlmProbe()
+  res.json(publicLlmSettings())
 })
 
 const distDir = path.join(__dirname, '..', 'dist')
@@ -491,12 +786,22 @@ if (fs.existsSync(distDir)) {
   })
 }
 
+try {
+  await initDb()
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+}
+
 app.listen(PORT, () => {
+  const runtime = resolveLlmRuntime()
   console.log(`VTBIH API http://localhost:${PORT}`)
-  console.log(`Docling ${config.doclingUrl || 'не задан'} · Qwen ${config.llmApiUrl || 'не задан'} · ${config.llmModel}`)
+  console.log(
+    `PostgreSQL · Docling ${config.doclingUrl || 'не задан'} · ${runtime.label} ${runtime.apiUrl || 'не задана'} · ${runtime.model || 'без модели'}`,
+  )
   void probeLlm({ force: true }).then((probe) => {
     if (!probe.configured) {
-      console.log('[llm probe] пропущен: SUMMARY_API_BASE_URL не задан')
+      console.log(`[llm probe] пропущен: ${probe.error || 'модель не настроена'}`)
       return
     }
     console.log(

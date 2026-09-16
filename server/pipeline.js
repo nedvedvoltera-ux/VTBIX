@@ -5,6 +5,7 @@ import { combineDocumentsMarkdown, patchDocument, readDocumentMarkdown, summariz
 import { applyExtraction, buildExtractionPrompts } from './extractPrompt.js'
 import { describeNetworkError, PipelineError } from './httpErrors.js'
 import { extractFromUpload } from './llm.js'
+import { resolveLlmRuntime } from './llmSettings.js'
 import { extractWithQwen } from './qwen.js'
 
 const abortByProject = new Map()
@@ -157,7 +158,8 @@ export async function runExtractDocuments({ project, notes, prompt, signal, onPr
       markdownReady: true,
     })
 
-    if (config.llmApiUrl) {
+    const runtime = resolveLlmRuntime()
+    if (runtime.configured) {
       const { systemPrompt, userPrompt } = buildExtractionPrompts({
         prompt,
         notes,
@@ -173,7 +175,7 @@ export async function runExtractDocuments({ project, notes, prompt, signal, onPr
             await onProgress({
               stage: 'extracting',
               progress: Math.min(92, 60 + Math.round(Object.keys(extracted).length * 5)),
-              message: `Qwen читает ${ready.length} документ(а)…`,
+              message: `${runtime.label} читает ${ready.length} документ(а)…`,
               extracted,
               markdownPreview: markdown.slice(0, 6000),
               markdownChars: markdown.length,
@@ -194,14 +196,16 @@ export async function runExtractDocuments({ project, notes, prompt, signal, onPr
         })
         return { markdown, extracted: result.extracted }
       } catch (error) {
+        const endpoint =
+          runtime.protocol === 'anthropic' ? `${runtime.apiUrl}/messages` : `${runtime.apiUrl}/chat/completions`
         const detail = describeNetworkError(error, {
-          service: 'Qwen',
-          url: `${config.llmApiUrl}/chat/completions`,
+          service: runtime.service,
+          url: endpoint,
         })
         console.error(`[pipeline ${project.id}] FAIL extracting (markdown already saved)`, detail)
         throw new PipelineError(
           'extracting',
-          `Этап 2/2 Qwen — Markdown уже сохранён (${ready.length} файл., ${markdown.length} симв.), ошибка на модели. ${detail}`,
+          `Этап 2/2 ${runtime.label} — Markdown уже сохранён (${ready.length} файл., ${markdown.length} симв.), ошибка на модели. ${detail}`,
           {
             markdownPreview: markdown.slice(0, 6000),
             markdownChars: markdown.length,
@@ -215,7 +219,9 @@ export async function runExtractDocuments({ project, notes, prompt, signal, onPr
       stage: 'done',
       progress: 100,
       extract: true,
-      message: 'Эвристический разбор (SUMMARY_API_BASE_URL не задан).',
+      message: runtime.source === 'cloud'
+        ? 'Эвристический разбор (облачная LLM не настроена: нужен API-ключ в Настройках).'
+        : 'Эвристический разбор (локальная LLM не задана).',
       extracted,
       markdownPreview: markdown.slice(0, 6000),
       markdownChars: markdown.length,

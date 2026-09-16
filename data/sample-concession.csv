@@ -1,0 +1,10 @@
+metric,value,comment
+name,Модернизация ТЭЦ-5,тест без Qwen
+industry,Энергетика,
+country,Россия,
+region,Новосибирская область,
+budget,12400000000,
+NPV,1.8 млрд руб,WACC 12.4%
+IRR,14.1%,ниже hurdle 15%
+DPP,9.6 лет,критично
+DSCR,1.18,близко к ковенанте

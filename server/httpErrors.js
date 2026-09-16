@@ -12,7 +12,8 @@ export class PipelineError extends Error {
 
 export function describeNetworkError(error, { service = 'Сервис', url = '' } = {}) {
   const raw = error instanceof Error ? error.message : String(error)
-  if (/^Этап\s/.test(raw) || /^Docling\s/.test(raw) || /^Qwen\s/.test(raw)) return raw
+  if (/^Этап\s/.test(raw) || /^Docling\s/.test(raw) || /^Qwen\s/.test(raw) || /^\S.+\s\d{3}:/.test(raw)) return raw
+  if (/не настроена|не задана/.test(raw)) return raw
 
   const cause = error?.cause
   const code = String(cause?.code || error?.code || '')

@@ -1,4 +1,4 @@
-import { buildMasterInstructions, CONCESSION_TERM_ITEMS } from './promptMaster.js'
+import { buildMasterInstructions, CONCESSION_TERM_ITEMS, normalizeTermRows, termsSchemaObject } from './promptMaster.js'
 
 function metricList(prompt) {
   const raw = Array.isArray(prompt?.metrics) ? prompt.metrics : []
@@ -12,6 +12,17 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
   const metricNames = metrics.length ? metrics.map((item) => item.name) : ['NPV', 'IRR', 'DPP']
 
   const schema = {
+    terms: termsSchemaObject(),
+    riskBalance: {
+      exceptions: 'условия, по которым баланс рисков нарушен, из MD',
+      statement:
+        'Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …',
+    },
+    assessment: {
+      imperativeLaw: 'соответствие императивным нормам закона по MD',
+      executionRealism: 'реалистичность исполнения, в т.ч. отсутствие или наличие ПД и ЗУ',
+      investorFinance: 'финансовая целесообразность для инвестора, распределение рисков и доходов',
+    },
     name: 'string',
     industry: 'string',
     country: 'string',
@@ -20,8 +31,8 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
     recommendation: 'invest | revise | reject',
     score: 0,
     note: {
+      description: 'связный абзац: проект + закон + ПД/ЗУ + выгода инвестора',
       executiveSummary: 'string',
-      description: 'string',
       industryContext: 'string',
       location: 'string',
       budgetBreakdown: 'string',
@@ -34,16 +45,6 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
       scenarios: [{ name: 'Базовый', npv: 'string', irr: 'string' }],
       risks: [{ title: 'string', level: 'low | mid | high', text: 'string' }],
       recommendation: 'string',
-      riskBalance: {
-        exceptions: 'условия, по которым баланс рисков нарушен',
-        statement: 'Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …',
-      },
-      terms: CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: 'string' })),
-      assessment: {
-        imperativeLaw: 'соответствие императивным нормам закона',
-        executionRealism: 'реалистичность исполнения, в т.ч. отсутствие ПД и ЗУ',
-        investorFinance: 'финансовая целесообразность для инвестора, распределение рисков и доходов',
-      },
     },
   }
 
@@ -51,7 +52,8 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
     buildMasterInstructions(prompt),
     '',
     'Верни ТОЛЬКО JSON без markdown-ограждений и без комментариев вне JSON.',
-    'Заполни схему ниже по документам. Пустые факты — «недостаточно данных», не выдумывай.',
+    'Первые ключи верхнего уровня: terms, riskBalance, assessment. Потом name и note.',
+    'Все факты только из Markdown ниже. Пустые факты — «недостаточно данных».',
   ].join('\n')
 
   const userPrompt = [
@@ -117,7 +119,22 @@ export function applyExtraction(project, data, prompt) {
     if (Number.isFinite(score)) next.score = Math.min(100, Math.max(0, Math.round(score)))
   }
   if (data.note && typeof data.note === 'object') {
-    next.note = mergeNote(project.note, data.note)
+    next.note = mergeNote(project.note, {
+      ...data.note,
+      description: data.note.description || data.description,
+      executiveSummary: data.note.executiveSummary || data.executiveSummary,
+      terms: data.note.terms ?? data.terms,
+      assessment: data.note.assessment ?? data.assessment,
+      riskBalance: data.note.riskBalance ?? data.riskBalance,
+    })
+  } else if (data.terms || data.assessment || data.riskBalance || data.description) {
+    next.note = mergeNote(project.note, {
+      description: data.description,
+      executiveSummary: data.executiveSummary,
+      terms: data.terms,
+      assessment: data.assessment,
+      riskBalance: data.riskBalance,
+    })
   }
   next.extractedByLlm = true
   const ranked = rankFromNote(next.note, prompt)
@@ -130,7 +147,7 @@ export function applyExtraction(project, data, prompt) {
 }
 
 function emptyTerms() {
-  return CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))
+  return normalizeTermRows(null)
 }
 
 function mergeNote(current, incoming) {
@@ -180,20 +197,14 @@ function mergeRiskBalance(current = {}, incoming) {
 }
 
 function mergeTerms(current = [], incoming) {
-  const byLabel = new Map()
-  for (const row of current) {
-    if (row?.label) byLabel.set(row.label, row)
-  }
-  if (Array.isArray(incoming)) {
-    for (const row of incoming) {
-      const label = String(row?.label || '').trim()
-      if (!label) continue
-      byLabel.set(label, { label, value: String(row?.value || '') })
-    }
-  }
-  const ordered = CONCESSION_TERM_ITEMS.map((item) => byLabel.get(item.label) || { label: item.label, value: '' })
-  const extras = [...byLabel.values()].filter((row) => !CONCESSION_TERM_ITEMS.some((item) => item.label === row.label))
-  return [...ordered, ...extras]
+  const incomingRows = normalizeTermRows(incoming)
+  const currentRows = normalizeTermRows(current)
+  return CONCESSION_TERM_ITEMS.map((item, index) => ({
+    id: item.id,
+    label: item.label,
+    value: incomingRows[index]?.value || currentRows[index]?.value || '',
+    group: item.group,
+  }))
 }
 
 function pickText(value, fallback) {

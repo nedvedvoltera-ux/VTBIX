@@ -17,10 +17,11 @@ function chipLabel(ok?: boolean, configured?: boolean, pending?: boolean) {
 }
 
 function formatProbe(probe: LlmProbe | null, pending: boolean) {
-  if (pending) return 'Идёт тестовый запрос в Qwen (слово PONG)…'
+  if (pending) return 'Идёт тестовый запрос в модель (слово PONG)…'
   if (!probe) return 'Нажмите, чтобы отправить тестовый запрос в модель'
-  if (!probe.configured) return probe.error || 'SUMMARY_API_BASE_URL не задан'
+  if (!probe.configured) return probe.error || 'модель не настроена'
   const bits = []
+  if (probe.label) bits.push(probe.label)
   if (probe.ok) bits.push(probe.matched ? 'ответила PONG' : `ответ: ${probe.reply || 'есть'}`)
   else bits.push(probe.error || 'модель не ответила')
   if (probe.latencyMs != null) bits.push(`${probe.latencyMs} мс`)
@@ -84,17 +85,22 @@ export function PipelineStatus({ apiOnline }: { apiOnline: boolean }) {
 
   const docling = health?.pipeline.docling
   const llmReachable = health?.pipeline.llm
+  const llmName = probe?.label || health?.pipeline.label || (health?.pipeline.source === 'cloud' ? 'LLM' : 'Qwen')
 
   return (
     <div className="topbar__status">
-      <span className={`svc svc--${apiOnline ? 'ok' : 'bad'}`}>{apiOnline ? 'API' : 'лок. кэш'}</span>
+      <span className={`svc svc--${apiOnline ? 'ok' : 'bad'}`}>
+        <span className="svc__full">{apiOnline ? 'API' : 'лок. кэш'}</span>
+        <span className="svc__short">{apiOnline ? 'API' : 'кэш'}</span>
+      </span>
       <button
         type="button"
         className={`svc svc--${chipState(docling?.ok, docling?.configured, apiOnline && !health)}`}
         title={docling?.error || (docling?.ok ? `Docling ${docling.url || 'доступен'}` : 'Docling не отвечает')}
         onClick={() => void refreshHealth()}
       >
-        Docling {chipLabel(docling?.ok, docling?.configured, apiOnline && !health)}
+        <span className="svc__full">Docling {chipLabel(docling?.ok, docling?.configured, apiOnline && !health)}</span>
+        <span className="svc__short">Doc</span>
       </button>
       <button
         type="button"
@@ -103,7 +109,10 @@ export function PipelineStatus({ apiOnline }: { apiOnline: boolean }) {
         onClick={() => void runProbe(true)}
         disabled={checking}
       >
-        Qwen {chipLabel(probe?.ok ?? llmReachable?.ok, probe?.configured ?? llmReachable?.configured, checking)}
+        <span className="svc__full">
+          {llmName} {chipLabel(probe?.ok ?? llmReachable?.ok, probe?.configured ?? llmReachable?.configured, checking)}
+        </span>
+        <span className="svc__short">LLM</span>
       </button>
     </div>
   )

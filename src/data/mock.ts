@@ -54,6 +54,49 @@ export const STATUS_FILTERS = [
   { id: 'error', label: 'Ошибка' },
 ] as const
 
+export const INFOVOD_DECISION_FILTERS = [
+  { id: 'all', label: 'Все решения' },
+  { id: 'new', label: 'Новые' },
+  { id: 'watch', label: 'На контроле' },
+  { id: 'pursue', label: 'В работу' },
+  { id: 'project', label: 'Объект заведён' },
+  { id: 'dismissed', label: 'Отклонены' },
+] as const
+
+export const INFOVOD_FIT_FILTERS = [
+  { id: 'all', label: 'Все по сигналу' },
+  { id: 'high', label: 'Сильный' },
+  { id: 'mid', label: 'Возможен КС' },
+  { id: 'low', label: 'Слабый' },
+] as const
+
+export const CRM_STAGES = [
+  { id: 'lead', label: 'Новый' },
+  { id: 'contact', label: 'Контакт' },
+  { id: 'meeting', label: 'Встреча' },
+  { id: 'offer', label: 'Предложение' },
+  { id: 'negotiation', label: 'Переговоры' },
+  { id: 'won', label: 'Сделка' },
+  { id: 'lost', label: 'Отказ' },
+  { id: 'hold', label: 'Пауза' },
+] as const
+
+export const CRM_STAGE_FILTERS = [{ id: 'all', label: 'Все стадии' }, ...CRM_STAGES] as const
+
+export const CRM_SOURCE_FILTERS = [
+  { id: 'all', label: 'Все поводы' },
+  { id: 'project', label: 'Объект анализа' },
+  { id: 'infovod', label: 'Инфоповод' },
+] as const
+
+export const CRM_TOUCH_KINDS = [
+  { id: 'meeting', label: 'Встреча' },
+  { id: 'call', label: 'Звонок' },
+  { id: 'email', label: 'Письмо' },
+  { id: 'note', label: 'Заметка' },
+  { id: 'other', label: 'Другое' },
+] as const
+
 export const PROMPT_SECTIONS: { id: PromptSectionId; title: string; hint: string }[] = [
   { id: 'executive', title: 'Резюме для руководства', hint: '1 страница: суть, цифры, рекомендация' },
   { id: 'description', title: 'Описание проекта', hint: 'что строится, сроки; оценка закона, ПД/ЗУ и выгодности для инвестора' },
@@ -102,7 +145,7 @@ export const DEFAULT_PROMPT: PromptConfig = {
   outputFormat: 'memo',
   recommendationStyle: 'traffic',
   extraInstructions:
-    'Если в файле нет ставки дисконтирования — явно пометь как допущение и используй отраслевой ориентир. Пояснения сотрудника имеют приоритет над догадками модели. Основные условия КС заполни таблицей. Баланс рисков сформулируй фразой «Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …». В описании отдельно оцени: соответствие императивным нормам закона; реалистичность исполнения при отсутствии ПД и ЗУ; финансовую целесообразность для инвестора.',
+    'Карточка КС важнее длинной записки. Сначала заполни terms по ключам (subject, object, term, constructionTerm, operationTerm, investmentVolume, capitalGrant, lostRevenue, violatorTravel, concessionFee, design, sitePreparation, landPlots, security, liability, terminationCompensation, specialCircumstances, directAgreement) только из Markdown. Три поля концедента не сливай. Описание проекта обязательно включает: императивные нормы закона; реалистичность при отсутствии/наличии ПД и ЗУ; финансовую целесообразность для инвестора. Баланс рисков — фраза «Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …».',
 }
 
 export const INITIAL_PROJECTS: Project[] = [

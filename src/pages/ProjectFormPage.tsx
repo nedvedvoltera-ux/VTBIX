@@ -9,7 +9,7 @@ import { DocumentList } from '../components/DocumentList'
 import { EMPTY_NOTE, NoteFields, ProjectCardFields } from '../components/ProjectCardFields'
 import type { Project } from '../types'
 import { projectDocuments } from '../utils/documents'
-import { markdownSummary, pipelineErrorTitle } from '../utils/pipelineStatus'
+import { markdownSummary, pipelineErrorTitle, pipelineFailed, pipelineStageTitle } from '../utils/pipelineStatus'
 
 function stageNotice(project: Project, fallback: string) {
   if (project.pipelineMessage) return project.pipelineMessage
@@ -329,9 +329,7 @@ export function ProjectFormPage() {
           {extracting && (
             <div className="banner">
               <div>
-                <strong>
-                  {form.pipelineStage === 'extracting' ? 'Qwen извлекает параметры' : 'Docling готовит Markdown'}
-                </strong>
+                <strong>{pipelineStageTitle(form)}</strong>
                 <p>{form.pipelineMessage || notice}</p>
               </div>
               <div className="progress progress--wide">
@@ -372,12 +370,18 @@ export function ProjectFormPage() {
               {extracting ? 'разбор…' : extracted ? `заполнено ${filledCount}/4` : 'ожидает файлы'}
             </span>
           </div>
-          {notice && <p className="callout">{notice}</p>}
+          {notice && !extracting && <p className="callout">{notice}</p>}
           {error && (
             <div className="callout callout--danger">
-              <strong>{pipelineErrorTitle(form)}</strong>
-              <p>{error}</p>
-              <p>{markdownSummary(form)}</p>
+              {pipelineFailed(form) ? (
+                <>
+                  <strong>{pipelineErrorTitle(form)}</strong>
+                  <p>{error}</p>
+                  <p>{markdownSummary(form)}</p>
+                </>
+              ) : (
+                <span>{error}</span>
+              )}
             </div>
           )}
           <ProjectCardFields form={form} patch={patch} />

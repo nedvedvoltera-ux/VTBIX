@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { FitBadge, RecommendationBadge, StatusBadge } from '../components/StatusBadge'
@@ -8,78 +8,88 @@ import { formatBudget, formatDate } from '../utils/format'
 import { IconFile, IconIndustry, IconPin, IconSpark, IconWallet } from '../components/Icons'
 import type { AnalyticalNote, Project } from '../types'
 import { computeRanking } from '../utils/concession'
-import { analyzeProject, deleteProjectDocument, uploadProjectFiles } from '../api/client'
+import { analyzeProject, createCrmDeal, deleteProjectDocument, lookupCrmDeal, uploadProjectFiles } from '../api/client'
 import { projectDocuments } from '../utils/documents'
+import { displayConcessionTerms } from '../data/ksTerms'
 import { markdownSummary, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function NoteView({ note, project }: { note: AnalyticalNote; project: Project }) {
+  const terms = displayConcessionTerms(note.terms)
+  const exceptions = note.riskBalance?.exceptions || 'критичных перекосов не выявлено'
+  const riskStatement =
+    note.riskBalance?.statement ||
+    `Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о ${exceptions}.`
+  let lastGroup = ''
+
   return (
     <article className="note">
       <header className="note__hero">
-        <p className="eyebrow">Аналитическая записка</p>
+        <p className="eyebrow">Карточка проекта КС</p>
         <h2>{project.name}</h2>
-        <p>{note.executiveSummary}</p>
+        <p>{note.executiveSummary || 'Резюме появится после разбора Markdown моделью.'}</p>
       </header>
 
       <section>
         <h3>Описание проекта</h3>
-        <p>{note.description}</p>
+        <p>{note.description || '—'}</p>
       </section>
-      {(note.riskBalance?.statement || note.riskBalance?.exceptions) && (
-        <section>
-          <h3>Баланс распределения рисков</h3>
-          <p>
-            {note.riskBalance.statement ||
-              `Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о ${note.riskBalance.exceptions}.`}
-          </p>
-        </section>
-      )}
-      {note.terms && note.terms.some((row) => row.value) && (
-        <section>
-          <h3>Основные условия проекта КС</h3>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Условие</th>
-                  <th>Содержание</th>
-                </tr>
-              </thead>
-              <tbody>
-                {note.terms.map((row) => (
-                  <tr key={row.label}>
-                    <td>{row.label}</td>
-                    <td>{row.value || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-      {note.assessment && (note.assessment.imperativeLaw || note.assessment.executionRealism || note.assessment.investorFinance) && (
-        <section>
-          <h3>Оценка описания</h3>
-          {note.assessment.imperativeLaw && (
-            <>
-              <h4>Императивные нормы закона</h4>
-              <p>{note.assessment.imperativeLaw}</p>
-            </>
-          )}
-          {note.assessment.executionRealism && (
-            <>
-              <h4>Реалистичность исполнения (ПД, ЗУ)</h4>
-              <p>{note.assessment.executionRealism}</p>
-            </>
-          )}
-          {note.assessment.investorFinance && (
-            <>
-              <h4>Финансовая целесообразность для инвестора</h4>
-              <p>{note.assessment.investorFinance}</p>
-            </>
-          )}
-        </section>
-      )}
+
+      <section className="ks-assess">
+        <h3>Оценка по документу</h3>
+        <div className="ks-assess__grid">
+          <article>
+            <h4>Императивные нормы закона</h4>
+            <p>{note.assessment?.imperativeLaw || '—'}</p>
+          </article>
+          <article>
+            <h4>Реалистичность исполнения (ПД, ЗУ)</h4>
+            <p>{note.assessment?.executionRealism || '—'}</p>
+          </article>
+          <article>
+            <h4>Финансовая целесообразность для инвестора</h4>
+            <p>{note.assessment?.investorFinance || '—'}</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h3>Баланс распределения рисков</h3>
+        <p>{riskStatement}</p>
+      </section>
+
+      <section>
+        <h3>Основные условия проекта КС</h3>
+        <div className="table-wrap">
+          <table className="ks-table">
+            <thead>
+              <tr>
+                <th>Условие</th>
+                <th>Содержание из соглашения</th>
+              </tr>
+            </thead>
+            <tbody>
+              {terms.map((row) => {
+                const showGroup = Boolean(row.group && row.group !== lastGroup)
+                if (row.group) lastGroup = row.group
+                else lastGroup = ''
+                return (
+                  <Fragment key={row.id}>
+                    {showGroup && (
+                      <tr className="ks-table__group">
+                        <th colSpan={2}>{row.group}</th>
+                      </tr>
+                    )}
+                    <tr>
+                      <td>{row.label}</td>
+                      <td>{row.value || 'недостаточно данных'}</td>
+                    </tr>
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <section>
         <h3>Отраслевой контекст</h3>
         <p>{note.industryContext}</p>
@@ -170,10 +180,19 @@ export function ProjectDetailPage() {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Project | null>(project ?? null)
   const addRef = useRef<HTMLInputElement>(null)
+  const [crmId, setCrmId] = useState<string | null>(null)
+  const [crmBusy, setCrmBusy] = useState(false)
 
   useEffect(() => {
     if (project && !editing) setForm(project)
   }, [project, editing])
+
+  useEffect(() => {
+    if (!project?.id) return
+    void lookupCrmDeal({ projectId: project.id })
+      .then((result) => setCrmId(result.deal?.id || null))
+      .catch(() => setCrmId(null))
+  }, [project?.id])
 
   if (!project || !form) {
     return (
@@ -234,6 +253,17 @@ export function ProjectDetailPage() {
     navigate('/')
   }
 
+  async function toCrm() {
+    setCrmBusy(true)
+    try {
+      const result = await createCrmDeal({ sourceType: 'project', projectId: currentProject.id })
+      setCrmId(result.deal.id)
+      navigate(`/crm/${result.deal.id}`)
+    } finally {
+      setCrmBusy(false)
+    }
+  }
+
   return (
     <section className="page">
       <div className="page-head">
@@ -268,6 +298,15 @@ export function ProjectDetailPage() {
               <button type="button" className="btn btn--primary" onClick={startEdit}>
                 Править карточку
               </button>
+              {crmId ? (
+                <Link className="btn" to={`/crm/${crmId}`}>
+                  Открыть CRM
+                </Link>
+              ) : (
+                <button type="button" className="btn" disabled={crmBusy} onClick={() => void toCrm()}>
+                  {crmBusy ? 'В CRM…' : 'В CRM'}
+                </button>
+              )}
               <button
                 type="button"
                 className="btn"
@@ -293,7 +332,10 @@ export function ProjectDetailPage() {
       {editing ? (
         <div className="stack">
           <div className="panel">
-            <h2>Поля карточки</h2>
+            <div className="panel__head">
+              <h2>Поля карточки</h2>
+              <StatusBadge status={form.status} />
+            </div>
             <ProjectCardFields form={form} patch={patch} />
           </div>
           <div className="panel">
@@ -448,7 +490,12 @@ export function ProjectDetailPage() {
 
           <div className="split split--note">
             <div className="stack">
-              {project.note && (project.note.executiveSummary || project.note.description || project.status === 'ready') ? (
+              {project.note &&
+              (project.extractedByLlm ||
+                project.note.executiveSummary ||
+                project.note.description ||
+                (project.note.terms && project.note.terms.some((row) => row.value)) ||
+                project.status === 'ready') ? (
                 <NoteView note={project.note} project={project} />
               ) : (
                 <div className="empty empty--soft">

@@ -1,6 +1,7 @@
 import { config } from './config.js'
 import { describeNetworkError, fetchOrThrow } from './httpErrors.js'
 import { extractJsonObject, stripThink } from './jsonRepair.js'
+import { resolveLlmRuntime } from './llmSettings.js'
 
 async function readSseContent(response, onDelta) {
   const reader = response.body?.getReader()
@@ -43,57 +44,136 @@ async function readSseContent(response, onDelta) {
   return content
 }
 
-async function chat(messages, { stream, signal, jsonMode, extras = true, maxTokens } = {}) {
-  const headers = { 'Content-Type': 'application/json' }
-  if (config.llmApiKey) headers.Authorization = `Bearer ${config.llmApiKey}`
+function runtimeMeta(runtime) {
+  return {
+    source: runtime.source,
+    provider: runtime.provider,
+    label: runtime.label,
+    model: runtime.model,
+    url: runtime.apiUrl,
+  }
+}
 
+function notConfiguredError(runtime) {
+  if (runtime.source === 'cloud') {
+    const missing = (runtime.missing || []).join(', ') || 'API-ключ'
+    return `Облачная LLM не настроена: укажите ${missing} в Настройках`
+  }
+  return 'Локальная LLM не задана: укажите SUMMARY_API_BASE_URL в .env или выберите облако в Настройках'
+}
+
+function buildHeaders(runtime) {
+  const headers = { 'Content-Type': 'application/json', ...(runtime.extraHeaders || {}) }
+  if (runtime.protocol === 'anthropic') {
+    if (runtime.apiKey) headers['x-api-key'] = runtime.apiKey
+    headers['anthropic-version'] = '2023-06-01'
+    return headers
+  }
+  if (runtime.apiKey) headers.Authorization = `Bearer ${runtime.apiKey}`
+  return headers
+}
+
+async function chatOpenAI(runtime, messages, { stream, signal, jsonMode, extras = true, maxTokens } = {}) {
   const body = {
-    model: config.llmModel,
+    model: runtime.model,
     temperature: config.llmTemperature,
     max_tokens: maxTokens || config.llmMaxTokens,
     messages,
     stream,
   }
   if (jsonMode) body.response_format = { type: 'json_object' }
-  if (extras && !config.llmEnableThinking) {
+  if (extras && runtime.extras && !config.llmEnableThinking) {
     body.enable_thinking = false
     body.chat_template_kwargs = { enable_thinking: false }
   }
 
-  const response = await fetchOrThrow(
-    `${config.llmApiUrl}/chat/completions`,
+  return fetchOrThrow(
+    `${runtime.apiUrl}/chat/completions`,
     {
       method: 'POST',
-      headers,
+      headers: buildHeaders(runtime),
       body: JSON.stringify(body),
       signal,
     },
-    'Qwen',
+    runtime.service,
   )
-  return response
 }
 
-export async function extractWithQwen({ systemPrompt, userPrompt, signal, onPartial }) {
-  if (!config.llmApiUrl) {
-    throw new Error('LLM не задана: укажите SUMMARY_API_BASE_URL и SUMMARY_MODEL в .env')
+async function chatAnthropic(runtime, messages, { signal, maxTokens } = {}) {
+  const system = messages
+    .filter((item) => item.role === 'system')
+    .map((item) => item.content)
+    .join('\n\n')
+  const rest = messages
+    .filter((item) => item.role !== 'system')
+    .map((item) => ({
+      role: item.role === 'assistant' ? 'assistant' : 'user',
+      content: item.content,
+    }))
+  const body = {
+    model: runtime.model,
+    max_tokens: maxTokens || config.llmMaxTokens,
+    temperature: config.llmTemperature,
+    messages: rest,
+    stream: false,
   }
+  if (system) body.system = system
+  return fetchOrThrow(
+    `${runtime.apiUrl}/messages`,
+    {
+      method: 'POST',
+      headers: buildHeaders(runtime),
+      body: JSON.stringify(body),
+      signal,
+    },
+    runtime.service,
+  )
+}
+
+async function readAnthropicText(response) {
+  const payload = await response.json()
+  const parts = Array.isArray(payload?.content) ? payload.content : []
+  return parts.map((part) => (typeof part?.text === 'string' ? part.text : '')).join('')
+}
+
+export async function completeJsonWithLlm({ systemPrompt, userPrompt, signal, onPartial, emptyError } = {}) {
+  const runtime = resolveLlmRuntime()
+  if (!runtime.configured) {
+    throw new Error(notConfiguredError(runtime))
+  }
+  const failMessage = emptyError || `${runtime.service} не вернула JSON`
 
   const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt },
   ]
 
+  if (runtime.protocol === 'anthropic') {
+    const response = await chatAnthropic(runtime, messages, { signal })
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`${runtime.service} ${response.status}: ${body.slice(0, 400) || response.statusText}`)
+    }
+    const raw = stripThink(await readAnthropicText(response))
+    const finalParsed = extractJsonObject(raw)
+    if (!finalParsed || typeof finalParsed !== 'object') {
+      throw new Error(failMessage)
+    }
+    onPartial?.(finalParsed, raw)
+    return { extracted: finalParsed, raw }
+  }
+
   let jsonMode = true
   let extras = true
-  let response = await chat(messages, { stream: true, signal, jsonMode, extras })
+  let response = await chatOpenAI(runtime, messages, { stream: true, signal, jsonMode, extras })
   if (response.status === 400) {
     jsonMode = false
     extras = false
-    response = await chat(messages, { stream: true, signal, jsonMode, extras })
+    response = await chatOpenAI(runtime, messages, { stream: true, signal, jsonMode, extras })
   }
   if (!response.ok) {
     const body = await response.text().catch(() => '')
-    throw new Error(`Qwen ${response.status}: ${body.slice(0, 400) || response.statusText}`)
+    throw new Error(`${runtime.service} ${response.status}: ${body.slice(0, 400) || response.statusText}`)
   }
 
   let lastEmit = 0
@@ -112,19 +192,28 @@ export async function extractWithQwen({ systemPrompt, userPrompt, signal, onPart
 
   const finalParsed = extractJsonObject(raw) || lastParsed
   if (!finalParsed || typeof finalParsed !== 'object') {
-    throw new Error('Qwen не вернула JSON с параметрами документа')
+    throw new Error(failMessage)
   }
   onPartial?.(finalParsed, raw)
   return { extracted: finalParsed, raw }
 }
 
+export async function extractWithQwen(opts) {
+  const runtime = resolveLlmRuntime()
+  return completeJsonWithLlm({
+    ...opts,
+    emptyError: `${runtime.service || 'LLM'} не вернула JSON с параметрами документа`,
+  })
+}
+
 export async function pingLlm() {
-  if (!config.llmApiUrl) return { ok: false, configured: false, model: config.llmModel }
+  const runtime = resolveLlmRuntime()
+  if (!runtime.configured) {
+    return { ok: false, configured: false, ...runtimeMeta(runtime), error: notConfiguredError(runtime) }
+  }
   try {
-    const headers = {}
-    if (config.llmApiKey) headers.Authorization = `Bearer ${config.llmApiKey}`
-    const response = await fetch(`${config.llmApiUrl}/models`, {
-      headers,
+    const response = await fetch(`${runtime.apiUrl}/models`, {
+      headers: buildHeaders(runtime),
       signal: AbortSignal.timeout(2500),
     })
     if (!response.ok) {
@@ -132,19 +221,17 @@ export async function pingLlm() {
       return {
         ok: false,
         configured: true,
-        model: config.llmModel,
-        url: config.llmApiUrl,
-        error: `Qwen ${response.status}: ${body.slice(0, 200) || response.statusText}`,
+        ...runtimeMeta(runtime),
+        error: `${runtime.service} ${response.status}: ${body.slice(0, 200) || response.statusText}`,
       }
     }
-    return { ok: true, configured: true, model: config.llmModel, url: config.llmApiUrl }
+    return { ok: true, configured: true, ...runtimeMeta(runtime) }
   } catch (error) {
     return {
       ok: false,
       configured: true,
-      model: config.llmModel,
-      url: config.llmApiUrl,
-      error: describeNetworkError(error, { service: 'Qwen', url: `${config.llmApiUrl}/models` }),
+      ...runtimeMeta(runtime),
+      error: describeNetworkError(error, { service: runtime.service, url: `${runtime.apiUrl}/models` }),
     }
   }
 }
@@ -158,43 +245,58 @@ export function getLastLlmProbe() {
   return lastProbe
 }
 
+export function resetLlmProbe() {
+  lastProbe = null
+  probeInFlight = null
+}
+
 function storeProbe(probe) {
   lastProbe = probe
   return probe
 }
 
 async function runLlmProbe() {
+  const runtime = resolveLlmRuntime()
   const checkedAt = new Date().toISOString()
-  if (!config.llmApiUrl) {
+  if (!runtime.configured) {
     return storeProbe({
       ok: false,
       configured: false,
-      model: config.llmModel,
-      error: 'SUMMARY_API_BASE_URL не задан — тестовый запрос не отправлен',
+      ...runtimeMeta(runtime),
+      error: notConfiguredError(runtime),
       checkedAt,
     })
   }
 
   const started = Date.now()
-  const url = `${config.llmApiUrl}/chat/completions`
   const messages = [{ role: 'user', content: 'Ответь строго одним словом: PONG' }]
+  const url =
+    runtime.protocol === 'anthropic' ? `${runtime.apiUrl}/messages` : `${runtime.apiUrl}/chat/completions`
 
   try {
-    let response = await chat(messages, {
-      stream: false,
-      jsonMode: false,
-      extras: true,
-      maxTokens: 24,
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    })
-    if (response.status === 400) {
-      response = await chat(messages, {
-        stream: false,
-        jsonMode: false,
-        extras: false,
+    let response
+    if (runtime.protocol === 'anthropic') {
+      response = await chatAnthropic(runtime, messages, {
         maxTokens: 24,
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       })
+    } else {
+      response = await chatOpenAI(runtime, messages, {
+        stream: false,
+        jsonMode: false,
+        extras: true,
+        maxTokens: 24,
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      })
+      if (response.status === 400) {
+        response = await chatOpenAI(runtime, messages, {
+          stream: false,
+          jsonMode: false,
+          extras: false,
+          maxTokens: 24,
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        })
+      }
     }
 
     const latencyMs = Date.now() - started
@@ -203,23 +305,27 @@ async function runLlmProbe() {
       const probe = storeProbe({
         ok: false,
         configured: true,
-        model: config.llmModel,
-        url: config.llmApiUrl,
+        ...runtimeMeta(runtime),
         latencyMs,
-        error: `Qwen ${response.status}: ${body.slice(0, 240) || response.statusText}`,
+        error: `${runtime.service} ${response.status}: ${body.slice(0, 240) || response.statusText}`,
         checkedAt: new Date().toISOString(),
       })
       console.warn(`[llm probe] fail ${probe.error}`)
       return probe
     }
 
-    const payload = await response.json()
-    const reply = stripThink(String(payload?.choices?.[0]?.message?.content || '')).trim()
+    let reply = ''
+    if (runtime.protocol === 'anthropic') {
+      reply = stripThink(await readAnthropicText(response)).trim()
+    } else {
+      const payload = await response.json()
+      reply = stripThink(String(payload?.choices?.[0]?.message?.content || '')).trim()
+    }
+
     const probe = storeProbe({
       ok: Boolean(reply),
       configured: true,
-      model: config.llmModel,
-      url: config.llmApiUrl,
+      ...runtimeMeta(runtime),
       latencyMs,
       reply: reply.slice(0, 80),
       matched: /pong/i.test(reply),
@@ -227,19 +333,16 @@ async function runLlmProbe() {
       checkedAt: new Date().toISOString(),
     })
     console.log(
-      probe.ok
-        ? `[llm probe] ok ${latencyMs}ms ${probe.reply}`
-        : `[llm probe] fail ${probe.error}`,
+      probe.ok ? `[llm probe] ok ${latencyMs}ms ${probe.reply}` : `[llm probe] fail ${probe.error}`,
     )
     return probe
   } catch (error) {
     const probe = storeProbe({
       ok: false,
       configured: true,
-      model: config.llmModel,
-      url: config.llmApiUrl,
+      ...runtimeMeta(runtime),
       latencyMs: Date.now() - started,
-      error: describeNetworkError(error, { service: 'Qwen', url }),
+      error: describeNetworkError(error, { service: runtime.service, url }),
       checkedAt: new Date().toISOString(),
     })
     console.warn(`[llm probe] fail ${probe.error}`)

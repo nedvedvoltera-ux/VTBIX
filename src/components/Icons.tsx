@@ -28,6 +28,15 @@ export function IconGrid(props: IconProps) {
   )
 }
 
+export function IconGear(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="3.1" />
+      <path d="M12 3.4v2.1M12 18.5v2.1M3.4 12h2.1M18.5 12h2.1M5.8 5.8l1.5 1.5M16.7 16.7l1.5 1.5M18.2 5.8l-1.5 1.5M7.3 16.7l-1.5 1.5" />
+    </Svg>
+  )
+}
+
 export function IconSliders(props: IconProps) {
   return (
     <Svg {...props}>
@@ -150,11 +159,43 @@ export function IconRank(props: IconProps) {
   )
 }
 
-export function IconRefresh(props: IconProps) {
+export function IconNews(props: IconProps) {
   return (
     <Svg {...props}>
-      <path d="M20 12a8 8 0 1 1-2.3-5.6" />
-      <path d="M20 4v6h-6" />
+      <path d="M4 5h12v14H4z" />
+      <path d="M16 8h4v11a2 2 0 0 1-2 2H6" />
+      <path d="M7 9h6M7 12h6M7 15h3" />
+    </Svg>
+  )
+}
+
+export function IconLogout(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
+      <path d="M16 8l4 4-4 4" />
+      <path d="M20 12H10" />
+    </Svg>
+  )
+}
+
+export function IconKanban(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="5" height="16" rx="1.1" />
+      <rect x="10" y="4" width="5" height="10" rx="1.1" />
+      <rect x="17" y="4" width="5" height="13" rx="1.1" />
+    </Svg>
+  )
+}
+
+export function IconCrm(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="3.2" />
+      <path d="M22 21v-2a3.6 3.6 0 0 0-3-3.45" />
+      <path d="M16 3.13a3.2 3.2 0 0 1 0 6.24" />
     </Svg>
   )
 }

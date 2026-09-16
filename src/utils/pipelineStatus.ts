@@ -6,6 +6,16 @@ export function markdownWasBuilt(project: Project) {
   return Boolean(project.markdownReady || project.markdownPreview || (project.markdownChars ?? 0) > 0)
 }
 
+export function pipelineStageTitle(project: Project) {
+  if (project.pipelineStage === 'converting') return 'Docling готовит Markdown'
+  if (project.pipelineStage === 'extracting') return 'Qwen извлекает параметры'
+  return 'Разбор запущен'
+}
+
+export function pipelineFailed(project: Project) {
+  return project.status === 'error' || Boolean(project.pipelineFailedAt)
+}
+
 export function pipelineErrorTitle(project: Project) {
   if (project.pipelineFailedAt === 'extracting' || markdownWasBuilt(project)) {
     return 'Ошибка на этапе Qwen — Markdown уже создан'

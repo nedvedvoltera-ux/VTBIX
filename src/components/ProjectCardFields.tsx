@@ -1,16 +1,8 @@
 import { COUNTRIES, INDUSTRIES, REGIONS_BY_COUNTRY } from '../data/mock'
-import { CONCESSION_TERM_ITEMS } from '../data/ksTerms'
+import { emptyConcessionTerms } from '../data/ksTerms'
 import { REGION_RATINGS } from '../data/regions'
-import type { AnalyticalNote, ConcessionFit, Project, ProjectStatus, Recommendation } from '../types'
+import type { AnalyticalNote, ConcessionFit, Project, Recommendation } from '../types'
 import { clampScore } from '../utils/concession'
-
-const STATUSES: { id: ProjectStatus; label: string }[] = [
-  { id: 'draft', label: 'Черновик' },
-  { id: 'queued', label: 'В очереди' },
-  { id: 'processing', label: 'Расчёт' },
-  { id: 'ready', label: 'Готово' },
-  { id: 'error', label: 'Ошибка' },
-]
 
 const FITS: { id: ConcessionFit; label: string }[] = [
   { id: 'advantageous', label: 'Выгодно' },
@@ -35,7 +27,7 @@ export const EMPTY_NOTE: AnalyticalNote = {
   risks: [{ title: '', level: 'mid', text: '' }],
   recommendation: '',
   riskBalance: { exceptions: '', statement: '' },
-  terms: CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' })),
+  terms: emptyConcessionTerms(),
   assessment: { imperativeLaw: '', executionRealism: '', investorFinance: '' },
 }
 
@@ -58,26 +50,6 @@ export function ProjectCardFields({ form, patch }: { form: Project; patch: Patch
       <label className="field">
         Ответственный
         <input value={form.owner} onChange={(e) => patch('owner', e.target.value)} />
-      </label>
-      <label className="field">
-        Статус расчёта
-        <select value={form.status} onChange={(e) => patch('status', e.target.value as ProjectStatus)}>
-          {STATUSES.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="field">
-        Прогресс расчёта, %
-        <input
-          type="number"
-          min={0}
-          max={100}
-          value={form.progress}
-          onChange={(e) => patch('progress', Number(e.target.value))}
-        />
       </label>
       <label className="field">
         Выгода для концессионера
@@ -399,18 +371,15 @@ export function NoteFields({
 
       <div className="field">
         Основные условия проекта КС
-        {(note.terms?.length ? note.terms : CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))).map(
-          (row, index) => (
-            <div className="inline-add" key={`term-${row.label}-${index}`}>
-              <input value={row.label} readOnly />
+        {(note.terms?.length ? note.terms : emptyConcessionTerms()).map((row, index) => (
+            <div className="inline-add" key={`term-${row.id || row.label}-${index}`}>
+              <input value={row.group ? `${row.group}: ${row.label}` : row.label} readOnly />
               <textarea
                 rows={2}
                 placeholder="Условие из соглашения"
                 value={row.value}
                 onChange={(e) => {
-                  const list = note.terms?.length
-                    ? note.terms
-                    : CONCESSION_TERM_ITEMS.map((item) => ({ label: item.label, value: '' }))
+                  const list = note.terms?.length ? note.terms : emptyConcessionTerms()
                   patch(
                     'terms',
                     list.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)),
@@ -418,8 +387,7 @@ export function NoteFields({
                 }}
               />
             </div>
-          ),
-        )}
+          ))}
       </div>
 
       <label className="field">

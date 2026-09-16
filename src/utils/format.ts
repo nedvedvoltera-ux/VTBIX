@@ -137,6 +137,20 @@ export function formatDate(iso: string): string {
   })
 }
 
+export function toDatetimeLocal(iso?: string): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  if (!Number.isFinite(date.getTime())) return ''
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+export function fromDatetimeLocal(value: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : ''
+}
+
 export function uid(prefix = 'p'): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`
 }

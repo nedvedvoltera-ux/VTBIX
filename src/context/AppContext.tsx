@@ -5,6 +5,7 @@ import { DEFAULT_PROMPT, SEED_PROJECT_IDS } from '../data/mock'
 import type { Project, PromptConfig } from '../types'
 import { hydratePrompt, normalizeMetrics } from '../utils/concession'
 import { uid } from '../utils/format'
+import { useAuth } from './AuthContext'
 
 const PROJECTS_KEY = 'vtbih.projects'
 const PROMPT_KEY = 'vtbih.prompt'
@@ -35,13 +36,20 @@ function isRealProject(project: Project) {
   return !SEED_PROJECT_IDS.has(project.id)
 }
 
+function isUnauthorized(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'status' in error && (error as { status?: number }).status === 401)
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
+  const { loading: authLoading, enabled: authEnabled, user, refresh: refreshAuth } = useAuth()
+  const canLoadData = !authLoading && (!authEnabled || Boolean(user))
   const [projects, setProjects] = useState<Project[]>(() => readJson<Project[]>(PROJECTS_KEY, []).filter(isRealProject))
   const [prompt, setPromptState] = useState<PromptConfig>(() => hydratePrompt(readJson(PROMPT_KEY, DEFAULT_PROMPT), DEFAULT_PROMPT))
   const [apiOnline, setApiOnline] = useState(false)
   const apiOnlineRef = useRef(false)
 
   useEffect(() => {
+    if (!canLoadData) return undefined
     let cancelled = false
     ;(async () => {
       const online = await apiHealth()
@@ -56,7 +64,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setProjects(remote.filter(isRealProject))
         if (remotePrompt) setPromptState(hydratePrompt(remotePrompt, DEFAULT_PROMPT))
         else await putPrompt(DEFAULT_PROMPT)
-      } catch {
+      } catch (error) {
+        if (isUnauthorized(error)) {
+          void refreshAuth()
+          return
+        }
         apiOnlineRef.current = false
         setApiOnline(false)
       }
@@ -64,7 +76,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [canLoadData, user?.id, refreshAuth])
 
   useEffect(() => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects))
@@ -77,14 +89,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const hasProcessing = projects.some((item) => item.status === 'processing')
 
   useEffect(() => {
-    if (!apiOnline) return undefined
+    if (!apiOnline || !canLoadData) return undefined
     const timer = window.setInterval(() => {
       void fetchProjects()
         .then((remote) => setProjects(remote.filter(isRealProject)))
-        .catch(() => undefined)
+        .catch((error) => {
+          if (isUnauthorized(error)) void refreshAuth()
+        })
     }, hasProcessing ? 1000 : 2500)
     return () => window.clearInterval(timer)
-  }, [apiOnline, hasProcessing])
+  }, [apiOnline, canLoadData, hasProcessing, refreshAuth])
 
   const persist = useCallback(async (project: Project) => {
     if (!apiOnlineRef.current) return project

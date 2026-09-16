@@ -1,0 +1,14 @@
+# Оверлей для машин с подходящей дискретной NVIDIA.
+#
+# Подключается автоматически скриптами deploy.ps1 / deploy.sh, вручную:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# На машине без GPU (или без NVIDIA Container Toolkit) этот файл подключать нельзя:
+# Docker откажется создавать контейнер с ошибкой «could not select device driver».
+services:
+  docling:
+    gpus: all
+    environment:
+      # Явно cuda, а не auto: при поломке проброса разбор упадёт с ошибкой,
+      # а не уйдёт молча на процессор в десять раз медленнее.
+      DOCLING_DEVICE: cuda

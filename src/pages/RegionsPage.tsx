@@ -94,6 +94,38 @@ export function RegionsPage() {
         </div>
       </div>
 
+      <p className="hint regions-scroll-hint">На телефоне — карточки. Полная таблица Минфина доступна на широком экране или в справке субъекта.</p>
+
+      <div className="regions-cards">
+        {filtered.map((region) => (
+          <Link key={region.id} to={`/regions/${region.id}`} className={`card region-card region-card--${region.concessionFit}`}>
+            <div className="region-card__top">
+              <FitBadge value={region.concessionFit} />
+              <span className="hint">{region.federalDistrict} ФО</span>
+            </div>
+            <h3>{region.subject}</h3>
+            <dl className="region-card__facts">
+              <div>
+                <dt>АКРА 2025</dt>
+                <dd>{region.acra2025}</dd>
+              </div>
+              <div>
+                <dt>Прогноз</dt>
+                <dd>{OUTLOOK_LABEL[region.acraOutlook]}</dd>
+              </div>
+              <div>
+                <dt>Долг / свои доходы</dt>
+                <dd>{formatPct(region.debtToOwnRevenue)}</dd>
+              </div>
+              <div>
+                <dt>Финсостояние</dt>
+                <dd>{FIN_LABEL[region.finState]}</dd>
+              </div>
+            </dl>
+          </Link>
+        ))}
+      </div>
+
       <div className="table-scroll">
         <table className="rating-table">
           <thead>

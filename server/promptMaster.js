@@ -5,9 +5,9 @@ export const CONCESSION_TERM_ITEMS = [
   { id: 'constructionTerm', label: 'Срок строительства (критерий конкурса)' },
   { id: 'operationTerm', label: 'Срок эксплуатации' },
   { id: 'investmentVolume', label: 'Объем инвестиций в создание Объекта' },
-  { id: 'capitalGrant', label: 'Финансовое участие Концедента — капитальный грант' },
-  { id: 'lostRevenue', label: 'Финансовое участие Концедента — возмещение недополученных доходов' },
-  { id: 'violatorTravel', label: 'Финансовое участие Концедента — компенсация стоимости проезда нарушителей' },
+  { id: 'capitalGrant', label: 'Капитальный грант', group: 'Финансовое участие Концедента' },
+  { id: 'lostRevenue', label: 'Возмещение недополученных доходов', group: 'Финансовое участие Концедента' },
+  { id: 'violatorTravel', label: 'Компенсация стоимости проезда нарушителей', group: 'Финансовое участие Концедента' },
   { id: 'concessionFee', label: 'Концессионная плата' },
   { id: 'design', label: 'Проектирование' },
   { id: 'sitePreparation', label: 'Подготовка территории строительства' },
@@ -18,6 +18,107 @@ export const CONCESSION_TERM_ITEMS = [
   { id: 'specialCircumstances', label: 'Особые обстоятельства' },
   { id: 'directAgreement', label: 'Прямое соглашение' },
 ]
+
+export function termsSchemaObject() {
+  const obj = {}
+  for (const item of CONCESSION_TERM_ITEMS) {
+    obj[item.id] = `${item.group ? `${item.group}: ` : ''}${item.label} — 1–4 предложения строго из Markdown либо «недостаточно данных»`
+  }
+  return obj
+}
+
+function fold(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^a-zа-я0-9]+/gi, '')
+}
+
+const TERM_ALIASES = {
+  subject: ['subject', 'предмет', 'предметсоглашения'],
+  object: ['object', 'объект', 'объектсоглашения', 'объекткс'],
+  term: ['term', 'срокдействия', 'сроксоглашения'],
+  constructionTerm: ['constructionterm', 'срокстроительства', 'критерийконкурса'],
+  operationTerm: ['operationterm', 'срокэксплуатации'],
+  investmentVolume: ['investmentvolume', 'объеминвестиций', 'инвестициивсоздание'],
+  capitalGrant: ['capitalgrant', 'капитальныйгрант'],
+  lostRevenue: ['lostrevenue', 'недополученныхдоходов', 'возмещениенедополученных'],
+  violatorTravel: ['violatortravel', 'проезднарушителей', 'компенсацияпроезда'],
+  concessionFee: ['concessionfee', 'концессионнаяплата'],
+  design: ['design', 'проектирование'],
+  sitePreparation: ['sitepreparation', 'подготовкатерритории', 'подготовкастроительства'],
+  landPlots: ['landplots', 'земельныеучастки', 'земельныйучасток'],
+  security: ['security', 'обеспечениеисполнения', 'обеспечение'],
+  liability: ['liability', 'ответственность', 'неустойкиконцессионера'],
+  terminationCompensation: ['terminationcompensation', 'компенсацияприпрекращении'],
+  specialCircumstances: ['specialcircumstances', 'особыеобстоятельства'],
+  directAgreement: ['directagreement', 'прямоесоглашение'],
+}
+
+export function matchConcessionTermId(raw) {
+  const key = fold(raw)
+  if (!key) return null
+  for (const item of CONCESSION_TERM_ITEMS) {
+    if (item.id === raw || fold(item.id) === key || fold(item.label) === key) return item.id
+  }
+  for (const item of CONCESSION_TERM_ITEMS) {
+    const aliases = TERM_ALIASES[item.id] || []
+    if (aliases.some((alias) => alias === key || (alias.length >= 10 && key.includes(alias)))) return item.id
+  }
+  return null
+}
+
+function termValue(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (typeof value === 'object') {
+    if (typeof value.value === 'string') return value.value.trim()
+    if (typeof value.text === 'string') return value.text.trim()
+  }
+  return ''
+}
+
+export function normalizeTermRows(incoming) {
+  const byId = new Map(CONCESSION_TERM_ITEMS.map((item) => [item.id, '']))
+  const visit = (node, hint = '') => {
+    if (node == null) return
+    if (Array.isArray(node)) {
+      for (const row of node) {
+        if (!row || typeof row !== 'object') continue
+        const id =
+          matchConcessionTermId(row.id || '') ||
+          matchConcessionTermId(row.key || '') ||
+          matchConcessionTermId(row.label || '') ||
+          matchConcessionTermId(row.name || '') ||
+          matchConcessionTermId(row.title || '')
+        if (id) byId.set(id, termValue(row) || byId.get(id))
+        else visit(row)
+      }
+      return
+    }
+    if (typeof node !== 'object') {
+      const id = matchConcessionTermId(hint)
+      if (id) byId.set(id, termValue(node) || byId.get(id))
+      return
+    }
+    for (const [key, value] of Object.entries(node)) {
+      const id = matchConcessionTermId(key)
+      if (id) {
+        byId.set(id, termValue(value) || byId.get(id))
+        continue
+      }
+      if (value && typeof value === 'object') visit(value, key)
+    }
+  }
+  visit(incoming)
+  return CONCESSION_TERM_ITEMS.map((item) => ({
+    id: item.id,
+    label: item.label,
+    value: byId.get(item.id) || '',
+    group: item.group,
+  }))
+}
 
 export const PROMPT_SECTIONS = [
   { id: 'executive', title: 'Резюме для руководства', hint: '1 страница: суть, цифры, рекомендация' },
@@ -71,20 +172,28 @@ export function buildMasterInstructions(prompt = {}) {
   const metricLine = metrics.length
     ? metrics.map((item) => `${item.name} — вес ${item.weight ?? 10}`).join(', ')
     : 'NPV, IRR, DPP, WACC, EBITDA margin, DSCR'
+  const termCatalog = CONCESSION_TERM_ITEMS.map((item) => `- ${item.id}: ${item.group ? `${item.group} / ` : ''}${item.label}`).join('\n')
 
   return [
     `Ты — ${prompt.role || 'Старший финансовый аналитик инвестиционного комитета.'}`,
     `Пиши на ${lang} языке, ${tone}. Глубина: ${depth}. Формат: ${format}.`,
-    'Задача: подготовить аналитическую записку по концессионному проекту на основании Markdown документов (часто после Docling) и карточки объекта.',
+    'Задача: заполнить карточку концессионного проекта СТРОГО по Markdown документов (после Docling). Нельзя опираться на общие знания вместо файла.',
     notesRule,
     recRule,
     extras.length ? `Дополнительно: ${extras.join('; ')}.` : '',
-    'Обязательные разделы:',
+    'Порядок ключей JSON обязателен: сначала terms, riskBalance, assessment, description; затем остальные поля записки. Так карточка КС не обрезается.',
+    'terms — объект с фиксированными ключами (не массив и не переименовывай ключи):',
+    termCatalog,
+    'Каждый ключ terms обязателен. Значение: сжатие 1–4 предложений из Markdown. Если пункта нет в MD — ровно «недостаточно данных». Не выдумывай сроки, суммы и стороны.',
+    'capitalGrant, lostRevenue, violatorTravel — три отдельных поля финансового участия концедента, не склеивай их в одно.',
+    'riskBalance.exceptions — перечень условий, где баланс рисков нарушен (после слов «условиях о»). riskBalance.statement — фраза: «Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о {exceptions}.» Если перекосов нет: exceptions = «критичных перекосов не выявлено».',
+    'assessment.imperativeLaw — соответствие императивным нормам закона по тексту MD.',
+    'assessment.executionRealism — реалистичность исполнения в текущих условиях, отдельно про отсутствие или наличие ПД и ЗУ.',
+    'assessment.investorFinance — финансовая целесообразность для инвестора: как распределены риски и доходы.',
+    'description — связный абзац описания проекта, в котором явно звучат эти три оценки (закон, ПД/ЗУ, выгода инвестора). Не подменяй описание списком метрик.',
+    'Обязательные разделы записки после карточки:',
     ...enabled.map((section, index) => `${index + 1}. ${section.title} — ${section.hint}`),
-    `Обязательные метрики (вес = вклад в ранжирование выгодности): ${metricLine}. Для каждой метрики укажи значение как в документе и балл привлекательности для концессионера 0–100. Если метрики нет — value «недостаточно данных», score не ставь, ничего не выдумывай. Итоговый рейтинг объекта считается только после разбора, как взвешенное среднее баллов по этим весам.`,
-    'Основные условия проекта КС заполни таблицей note.terms: для каждой строки label и value. Если пункта нет в документах — value «недостаточно данных». Не выдумывай цифры и сроки.',
-    'note.riskBalance.exceptions — конкретные условия, по которым распределение рисков не сбалансировано (после слов «условиях о»). note.riskBalance.statement — целая фраза вида: «Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о {exceptions}.» Если перекосов нет, exceptions = «критичных перекосов не выявлено».',
-    'При формировании описания проекта отдельно оцени и запиши в note.assessment: (1) соответствие императивным нормам закона; (2) реалистичность исполнения в текущих условиях, в том числе отсутствие ПД и ЗУ; (3) финансовую целесообразность для инвестора — распределение рисков и доходов. Эти три вывода также отрази в note.description.',
+    `Обязательные метрики (вес = вклад в ранжирование выгодности): ${metricLine}. Для каждой метрики укажи значение как в документе и балл привлекательности для концессионера 0–100. Если метрики нет — value «недостаточно данных», score не ставь.`,
     'budget — число в рублях. Если в документе млрд — умножь на 1e9. Не выдумывай цифры, которых нет в Markdown.',
     prompt.extraInstructions ? `Особые указания:\n${prompt.extraInstructions}` : '',
   ]

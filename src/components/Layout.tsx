@@ -1,7 +1,8 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { useState } from 'react'
-import { IconChevron, IconClose, IconGrid, IconMenu, IconRank, IconSliders } from './Icons'
+import { useEffect, useState } from 'react'
+import { IconChevron, IconClose, IconCrm, IconGear, IconGrid, IconLogout, IconMenu, IconNews, IconRank, IconSliders } from './Icons'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
 import { PipelineStatus } from './PipelineStatus'
 
 const SIDEBAR_KEY = 'vtbih.sidebarCollapsed'
@@ -14,11 +15,29 @@ function readCollapsed() {
   }
 }
 
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  const letters = `${parts[0]?.[0] || ''}${parts[1]?.[0] || parts[0]?.[1] || ''}`
+  return letters.toUpperCase() || 'VT'
+}
+
 export function Layout() {
   const [open, setOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const location = useLocation()
   const { apiOnline } = useApp()
+  const { enabled, user, isAdmin, logout } = useAuth()
+  const whoName = enabled ? user?.name || 'Пользователь' : 'Гость'
+  const whoRole = enabled ? (isAdmin ? 'Администратор' : 'Пользователь') : 'Доступ без входа'
+
+  useEffect(() => {
+    setOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    document.body.classList.toggle('nav-open', open)
+    return () => document.body.classList.remove('nav-open')
+  }, [open])
 
   function toggleCollapsed() {
     setCollapsed((prev) => {
@@ -61,6 +80,26 @@ export function Layout() {
             <IconRank />
             <span className="nav__text">Рейтинг регионов</span>
           </NavLink>
+          <NavLink
+            to="/media"
+            title="Инфоповоды"
+            className={() => `nav__link ${location.pathname.startsWith('/media') ? 'active' : ''}`}
+          >
+            <IconNews />
+            <span className="nav__text">Инфоповоды</span>
+          </NavLink>
+          <NavLink
+            to="/crm"
+            title="CRM"
+            className={() => `nav__link ${location.pathname.startsWith('/crm') ? 'active' : ''}`}
+          >
+            <IconCrm />
+            <span className="nav__text">CRM</span>
+          </NavLink>
+          <NavLink to="/settings" title="Настройки" className={() => `nav__link ${location.pathname === '/settings' ? 'active' : ''}`}>
+            <IconGear />
+            <span className="nav__text">Настройки</span>
+          </NavLink>
           <NavLink to="/settings/prompt" title="Мастер промпта" className="nav__link">
             <IconSliders />
             <span className="nav__text">Мастер промпта</span>
@@ -78,12 +117,23 @@ export function Layout() {
           <IconChevron />
         </button>
 
-        <div className="sidebar__foot" title="Е. Соколова · Аналитик, финансы">
-          <div className="avatar">ЕС</div>
+        <div className="sidebar__foot" title={`${whoName} · ${whoRole}`}>
+          <div className="avatar">{initials(whoName)}</div>
           <div className="sidebar__who">
-            <strong>Е. Соколова</strong>
-            <p>Аналитик · финансы</p>
+            <strong>{whoName}</strong>
+            <p>{whoRole}</p>
           </div>
+          {enabled && user && (
+            <button
+              className="icon-btn sidebar__logout"
+              type="button"
+              title="Выйти"
+              aria-label="Выйти"
+              onClick={() => void logout()}
+            >
+              <IconLogout />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -99,7 +149,11 @@ export function Layout() {
               ? 'Настройки'
               : location.pathname.startsWith('/regions')
                 ? 'Рейтинг регионов'
-                : 'Концессии'}
+                : location.pathname.startsWith('/media')
+                  ? 'Инфоповоды'
+                  : location.pathname.startsWith('/crm')
+                    ? 'CRM'
+                    : 'Концессии'}
           </div>
           <PipelineStatus apiOnline={apiOnline} />
         </header>

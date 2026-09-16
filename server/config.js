@@ -31,7 +31,7 @@ function num(name, fallback) {
   return Number.isFinite(raw) && raw > 0 ? raw : fallback
 }
 
-function normalizeLlmBase(url) {
+export function normalizeLlmBase(url) {
   if (!url) return ''
   const trimmed = url.replace(/\/$/, '')
   if (/\/v1$/i.test(trimmed) || /\/v1\//i.test(trimmed)) return trimmed.replace(/\/chat\/completions$/i, '')
@@ -55,6 +55,7 @@ export const config = {
   llmMaxTokens: num('LLM_MAX_TOKENS', num('SUMMARY_MAX_TOKENS', 8192)),
   llmTimeoutMs: num('LLM_TIMEOUT_MS', 300_000),
   llmMaxDocChars: num('LLM_MAX_DOC_CHARS', 80_000),
+  braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
 }
 
 export function pipelineEnabled() {

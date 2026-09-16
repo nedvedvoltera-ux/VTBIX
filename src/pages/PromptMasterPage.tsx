@@ -4,6 +4,7 @@ import { useApp } from '../context/AppContext'
 import { DEFAULT_METRICS, PROMPT_SECTIONS } from '../data/mock'
 import type { MetricWeight, OutputFormat, PromptConfig, PromptDepth, PromptSectionId, PromptTone, RecommendationStyle } from '../types'
 import { applyRanking, clampScore, DEFAULT_METRIC_WEIGHT, metricKey } from '../utils/concession'
+import { SettingsNav } from '../components/SettingsNav'
 import { buildPromptPreview } from '../utils/promptBuilder'
 
 const TONES: { id: PromptTone; label: string; hint: string }[] = [
@@ -106,6 +107,8 @@ export function PromptMasterPage() {
           </button>
         </div>
       </div>
+
+      <SettingsNav />
 
       <div className="split split--prompt">
         <div className="stack">

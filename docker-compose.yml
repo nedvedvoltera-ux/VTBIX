@@ -1,15 +1,31 @@
 name: vtbih
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vtbih
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vtbih}
+      POSTGRES_DB: vtbih
+    volumes:
+      - vtbih-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vtbih -d vtbih"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   api:
     build: .
-    image: vtbih-api:1.1.7
+    image: vtbih-api:1.5.1
     ports:
       - "8080:8080"
     environment:
       PORT: 8080
       DATA_DIR: /app/data
-      DOCLING_URL: ${DOCLING_URL:-http://docling:5001}
+      DATABASE_URL: postgres://vtbih:${POSTGRES_PASSWORD:-vtbih}@postgres:5432/vtbih
+      DOCLING_URL: http://docling:5001
       DOCLING_TIMEOUT_MS: "900000"
       DOCLING_TABLE_MODE: ${DOCLING_TABLE_MODE:-accurate}
       SUMMARY_API_BASE_URL: ${SUMMARY_API_BASE_URL:-http://192.168.215.74:9080/v1}
@@ -20,11 +36,14 @@ services:
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
       LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-300000}
       LLM_MAX_DOC_CHARS: ${LLM_MAX_DOC_CHARS:-80000}
+      BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
     volumes:
       - vtbih-data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      postgres:
+        condition: service_healthy
       docling:
         condition: service_started
     restart: unless-stopped
@@ -36,8 +55,19 @@ services:
     environment:
       DOCLING_SERVE_ENABLE_UI: "0"
       DOCLING_SERVE_MAX_SYNC_WAIT: "900"
+      # Устройство разбора. База — процессор; GPU подключается оверлеем
+      # docker-compose.gpu.yml, который выбирают deploy.ps1 / deploy.sh.
+      DOCLING_DEVICE: ${DOCLING_DEVICE:-cpu}
+      DOCLING_NUM_THREADS: ${DOCLING_NUM_THREADS:-4}
+      OMP_NUM_THREADS: ${DOCLING_NUM_THREADS:-4}
+    volumes:
+      # Кириллической модели OCR в образе нет. Том хранит докачанный cyrillic_g2.pth,
+      # иначе русские PDF падают на этапе Docling после каждого пересоздания контейнера.
+      - vtbih-docling-models:/opt/app-root/src/.cache/docling/models
     shm_size: "1gb"
     restart: unless-stopped
 
 volumes:
   vtbih-data:
+  vtbih-pg:
+  vtbih-docling-models:
