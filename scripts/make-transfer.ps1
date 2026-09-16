@@ -89,8 +89,13 @@ try {
 
   if (-not $SkipData) {
     Write-Host 'Снимаю слепок данных…'
-    & (Join-Path $PSScriptRoot 'backup-data.ps1') -Out (Join-Path $stage 'data')
-    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Слепок данных не снялся' }
+    $dataDir = Join-Path $stage 'data'
+    & (Join-Path $PSScriptRoot 'backup-data.ps1') -Out $dataDir
+    # Судим по результату, а не по $LASTEXITCODE: после дочернего скрипта там
+    # остаётся код последней запущенной в нём внешней команды.
+    if (-not (Get-ChildItem $dataDir -Filter 'vtbih-data-*.zip' -ErrorAction SilentlyContinue)) {
+      throw 'Слепок данных не снялся'
+    }
   }
 
   $head = (Invoke-Git log -1 --format='%h %s').Text
