@@ -6,8 +6,7 @@
 Складывает вместе всё, что нужно второй машине:
 
   code.bundle          — история git целиком (все ветки и коммиты)
-  private\             — то, чего в репозитории нет: документы заказчика,
-                         расчёт трудозатрат, .env с адресами и ключами
+  private\             — .env с адресами и ключами, которого в репозитории нет
   data\vtbih-data-*.zip — слепок базы, загруженных файлов и модели OCR
   ЧИТАЙ-МЕНЯ.txt       — порядок действий на принимающей машине
 
@@ -17,6 +16,11 @@
 .PARAMETER Out
 Куда положить архив. По умолчанию — папка backup в корне проекта.
 
+.PARAMETER Documents
+Папка с документами заказчика и коммерческими расчётами. Они лежат вне
+проекта, потому что репозиторий публичный. Если путь указан, содержимое
+поедет в архиве отдельной папкой private\documents.
+
 .PARAMETER SkipData
 Собрать только код и приватные файлы, без слепка базы.
 
@@ -24,11 +28,12 @@
 .\scripts\make-transfer.ps1
 
 .EXAMPLE
-.\scripts\make-transfer.ps1 -Out E:\
+.\scripts\make-transfer.ps1 -Documents D:\VTBIH-документы -Out E:\
 #>
 [CmdletBinding()]
 param(
   [string]$Out,
+  [string]$Documents,
   [switch]$SkipData
 )
 
@@ -65,26 +70,24 @@ try {
   $bundle = Invoke-Git bundle create (Join-Path $stage 'code.bundle') --all
   if ($bundle.Code -ne 0) { throw "git bundle не собрался: $($bundle.Text)" }
 
-  # Файлы вне репозитория: документы заказчика, расчёт и .env.
-  # Через git они не едут — либо запрещены к публикации, либо в .gitignore.
+  # Через git не едет .env, а документы заказчика вообще лежат вне проекта:
+  # репозиторий публичный, и выкладывать их туда нельзя.
   $privateDir = Join-Path $stage 'private'
   New-Item -ItemType Directory -Force -Path $privateDir | Out-Null
   $carried = @()
-  foreach ($item in (Get-ChildItem $root -Filter 'VTBIH-trudochasy.*' -File -ErrorAction SilentlyContinue)) {
-    Copy-Item $item.FullName $privateDir; $carried += $item.Name
-  }
-  if (Test-Path (Join-Path $root 'docs')) {
-    $privateDocs = Join-Path $privateDir 'docs'
-    New-Item -ItemType Directory -Force -Path $privateDocs | Out-Null
-    foreach ($item in (Get-ChildItem (Join-Path $root 'docs') -File | Where-Object {
-      $_.Extension -eq '.pdf' -or $_.Name -like '*RAG*' -or $_.Name -like 'VTBIH-trudochasy.*'
-    })) {
-      Copy-Item $item.FullName $privateDocs; $carried += "docs\$($item.Name)"
-    }
-  }
   if (Test-Path (Join-Path $root '.env')) {
     Copy-Item (Join-Path $root '.env') (Join-Path $privateDir 'env.txt')
     $carried += '.env (в архиве лежит как private\env.txt)'
+  }
+  if ($Documents) {
+    if (-not (Test-Path -LiteralPath $Documents)) { throw "Папка с документами не найдена: $Documents" }
+    $privateDocs = Join-Path $privateDir 'documents'
+    New-Item -ItemType Directory -Force -Path $privateDocs | Out-Null
+    # Именно -Path: -LiteralPath не раскрывает шаблон и копирование молча
+    # не находит ни одного файла.
+    Copy-Item -Path (Join-Path $Documents '*') -Destination $privateDocs -Recurse -Force
+    $count = @(Get-ChildItem $privateDocs -Recurse -File).Count
+    $carried += "документы из $Documents ($count файлов)"
   }
 
   if (-not $SkipData) {
@@ -106,15 +109,17 @@ try {
     ''
     'ЧТО ВНУТРИ'
     '  code.bundle           — вся история git'
-    '  private\              — документы и .env, которых нет в репозитории'
+    '  private\env.txt       — .env, которого в репозитории нет'
+    '  private\documents\    — документы заказчика и расчёты (если вкладывали)'
     '  data\vtbih-data-*.zip — база, загруженные файлы, модель OCR'
     ''
     'ЕСЛИ ПРОЕКТ НА ПРИНИМАЮЩЕЙ МАШИНЕ УЖЕ ЕСТЬ'
     '  1. Скопируйте code.bundle рядом с проектом, затем в папке проекта:'
     '       git pull <путь>\code.bundle main'
-    '  2. Скопируйте файлы из private\ в проект: docs\ — в docs\,'
-    '     VTBIH-trudochasy.* — в корень, env.txt — в корень под именем .env'
-    '     (существующий .env не затирайте, если в нём свои адреса — сверьте)'
+    '  2. private\env.txt положите в корень проекта под именем .env'
+    '     (существующий .env не затирайте, если в нём свои адреса — сверьте).'
+    '     private\documents\ — НЕ в папку проекта: держите их рядом, на диске,'
+    '     иначе они попадут в публичный репозиторий.'
     '  3. .\deploy.ps1'
     '  4. .\scripts\restore-data.ps1 -Archive <путь>\data\vtbih-data-<дата>.zip'
     ''
