@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
-import { DEFAULT_METRICS, PROMPT_SECTIONS } from '../data/mock'
-import type { MetricWeight, OutputFormat, PromptConfig, PromptDepth, PromptSectionId, PromptTone, RecommendationStyle } from '../types'
-import { applyRanking, clampScore, DEFAULT_METRIC_WEIGHT, metricKey } from '../utils/concession'
+import { PROMPT_SECTIONS } from '../data/mock'
+import type { OutputFormat, PromptConfig, PromptDepth, PromptSectionId, PromptTone, RecommendationStyle } from '../types'
+import { applyRanking, clampScore, DEFAULT_METRIC_WEIGHT } from '../utils/concession'
 import { SettingsNav } from '../components/SettingsNav'
 import { buildPromptPreview } from '../utils/promptBuilder'
 
@@ -33,7 +33,6 @@ const REC_STYLES: { id: RecommendationStyle; label: string }[] = [
 export function PromptMasterPage() {
   const { prompt, setPrompt, resetPrompt, projects } = useApp()
   const [saved, setSaved] = useState(false)
-  const [metricDraft, setMetricDraft] = useState('')
   const sample = projects.find((item) => item.status === 'ready') ?? projects[0]
 
   const preview = useMemo(() => buildPromptPreview(prompt, sample), [prompt, sample])
@@ -63,23 +62,18 @@ export function PromptMasterPage() {
     })
   }
 
-  function addMetric() {
-    const value = metricDraft.trim()
-    if (!value) return
-    const key = metricKey(value)
-    if (prompt.metrics.some((item) => metricKey(item.name) === key)) return
-    patch({ metrics: [...prompt.metrics, { name: value, weight: DEFAULT_METRIC_WEIGHT }] })
-    setMetricDraft('')
+  function sectionWeight(id: PromptSectionId) {
+    return prompt.metrics.find((item) => item.id === id)?.weight ?? DEFAULT_METRIC_WEIGHT
   }
 
-  function patchMetric(index: number, partial: Partial<MetricWeight>) {
+  function patchSectionWeight(id: PromptSectionId, weight: number) {
+    const title = PROMPT_SECTIONS.find((item) => item.id === id)?.title || id
+    const exists = prompt.metrics.some((item) => item.id === id)
     patch({
-      metrics: prompt.metrics.map((item, i) => (i === index ? { ...item, ...partial } : item)),
+      metrics: exists
+        ? prompt.metrics.map((item) => (item.id === id ? { ...item, weight } : item))
+        : [...prompt.metrics, { id, name: title, weight }],
     })
-  }
-
-  function removeMetric(index: number) {
-    patch({ metrics: prompt.metrics.filter((_, i) => i !== index) })
   }
 
   function save() {
@@ -175,7 +169,11 @@ export function PromptMasterPage() {
           </div>
 
           <div className="card settings-block">
-            <h2>Структура записки · {enabledCount} разделов</h2>
+            <h2>Разделы записки и веса рейтинга · {enabledCount}</h2>
+            <p className="hint">
+              Галочка включает раздел в записку. Вес — вклад этого раздела в итоговый балл на главной. Балл 0–100 по
+              разделу ставит модель при разборе, его можно поправить в карточке.
+            </p>
             <ul className="section-list">
               {PROMPT_SECTIONS.map((section) => (
                 <li key={section.id}>
@@ -190,70 +188,39 @@ export function PromptMasterPage() {
                       <em>{section.hint}</em>
                     </span>
                   </label>
+                  {prompt.sections[section.id] && (
+                    <div className="section-weight">
+                      <label>
+                        Вес
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={sectionWeight(section.id)}
+                          onChange={(e) => patchSectionWeight(section.id, clampScore(Number(e.target.value)))}
+                        />
+                      </label>
+                      <input
+                        className="metric-weights__num"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={sectionWeight(section.id)}
+                        onChange={(e) =>
+                          patchSectionWeight(
+                            section.id,
+                            e.target.value === '' ? 0 : clampScore(Number(e.target.value)),
+                          )
+                        }
+                      />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
-          </div>
-
-          <div className="card settings-block">
-            <h2>Метрики и веса ранжирования</h2>
             <p className="hint">
-              Вес — вклад метрики в итоговый балл на главной. Балл по самой метрике (0–100) ставится в карточке проекта.
-              Порядок объектов пересчитывается сразу.
+              Сумма весов: {weightSum}. Нулевой вес оставляет раздел в записке, но не двигает рейтинг.
             </p>
-            <ul className="metric-weights">
-              {prompt.metrics.map((metric, index) => (
-                <li key={`${metric.name}-${index}`}>
-                  <strong>{metric.name}</strong>
-                  <label>
-                    Вес
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={metric.weight}
-                      onChange={(e) => patchMetric(index, { weight: clampScore(Number(e.target.value)) })}
-                    />
-                  </label>
-                  <input
-                    className="metric-weights__num"
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={metric.weight}
-                    onChange={(e) =>
-                      patchMetric(index, { weight: e.target.value === '' ? 0 : clampScore(Number(e.target.value)) })
-                    }
-                  />
-                  <button type="button" className="chip chip--dismiss" onClick={() => removeMetric(index)}>
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="inline-add">
-              <input
-                value={metricDraft}
-                list="metrics-list"
-                placeholder="Добавить метрику"
-                onChange={(e) => setMetricDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    addMetric()
-                  }
-                }}
-              />
-              <datalist id="metrics-list">
-                {DEFAULT_METRICS.map((item) => (
-                  <option key={item.name} value={item.name} />
-                ))}
-              </datalist>
-              <button type="button" className="btn" onClick={addMetric}>
-                Добавить
-              </button>
-            </div>
-            <p className="hint">Сумма весов: {weightSum}. Нулевой вес оставляет метрику в записке, но не двигает рейтинг.</p>
             {rankingPreview.length > 0 && (
               <>
                 <p className="field-label">Текущий порядок на главной</p>
@@ -268,7 +235,9 @@ export function PromptMasterPage() {
                 </ol>
               </>
             )}
+          </div>
 
+          <div className="card settings-block">
             <label className="check">
               <input
                 type="checkbox"
@@ -301,7 +270,7 @@ export function PromptMasterPage() {
                 rows={5}
                 value={prompt.extraInstructions}
                 onChange={(e) => patch({ extraInstructions: e.target.value })}
-                placeholder="Например: не оценивай ESG; всегда указывай валюту модели; если нет WACC — возьми отраслевой ориентир и пометь как допущение."
+                placeholder="Например: не оценивай ESG; если в документе нет цифры — пиши «недостаточно данных», не подставляй отраслевой ориентир."
               />
             </label>
           </div>

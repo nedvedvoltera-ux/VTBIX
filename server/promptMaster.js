@@ -126,7 +126,7 @@ export const PROMPT_SECTIONS = [
   { id: 'industry', title: 'Отраслевой контекст', hint: 'рынок, конкуренция, регуляторика' },
   { id: 'location', title: 'Локация и инфраструктура', hint: 'страна, регион, логистика, кадры' },
   { id: 'budget', title: 'Бюджет и структура затрат', hint: 'CAPEX/OPEX, источники финансирования' },
-  { id: 'financials', title: 'Финансовая модель', hint: 'NPV, IRR, DPP, WACC, чувствительность' },
+  { id: 'financials', title: 'Финансовая модель', hint: 'цифры модели из документа, источники, допущения' },
   { id: 'scenarios', title: 'Сценарный анализ', hint: 'базовый / оптимистичный / стресс' },
   { id: 'risks', title: 'Риски', hint: 'матрица вероятность × влияние; баланс распределения' },
   { id: 'comparables', title: 'Сравнение с аналогами', hint: 'benchmark по отрасли и региону' },
@@ -168,10 +168,10 @@ export function buildMasterInstructions(prompt = {}) {
   const extras = []
   if (prompt.includeComparables || prompt.sections?.comparables) extras.push('добавь блок сравнения с отраслевыми аналогами')
   if (prompt.includeEsg || prompt.sections?.esg) extras.push('включи ESG и санкционный контур')
-  const metrics = Array.isArray(prompt.metrics) ? prompt.metrics.filter((item) => item?.name) : []
+  const metrics = Array.isArray(prompt.metrics) ? prompt.metrics.filter((item) => item?.name || item?.id) : []
   const metricLine = metrics.length
-    ? metrics.map((item) => `${item.name} — вес ${item.weight ?? 10}`).join(', ')
-    : 'NPV, IRR, DPP, WACC, EBITDA margin, DSCR'
+    ? metrics.map((item) => `${item.name || item.id} — вес ${item.weight ?? 10}`).join(', ')
+    : 'веса задаются по включённым разделам записки'
   const termCatalog = CONCESSION_TERM_ITEMS.map((item) => `- ${item.id}: ${item.group ? `${item.group} / ` : ''}${item.label}`).join('\n')
 
   return [
@@ -193,7 +193,7 @@ export function buildMasterInstructions(prompt = {}) {
     'description — связный абзац описания проекта, в котором явно звучат эти три оценки (закон, ПД/ЗУ, выгода инвестора). Не подменяй описание списком метрик.',
     'Обязательные разделы записки после карточки:',
     ...enabled.map((section, index) => `${index + 1}. ${section.title} — ${section.hint}`),
-    `Обязательные метрики (вес = вклад в ранжирование выгодности): ${metricLine}. Для каждой метрики укажи значение как в документе и балл привлекательности для концессионера 0–100. Если метрики нет — value «недостаточно данных», score не ставь.`,
+    `Балл 0–100 — по каждому включённому разделу записки: ${metricLine}. Пиши баллы в note.sectionScores с ключами разделов (executive, description, …). Если оценить нечего — ключ не ставь. Итоговый рейтинг = взвешенное среднее этих баллов.`,
     'budget — число в рублях. Если в документе млрд — умножь на 1e9. Не выдумывай цифры, которых нет в Markdown.',
     prompt.extraInstructions ? `Особые указания:\n${prompt.extraInstructions}` : '',
   ]

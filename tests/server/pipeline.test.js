@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { abortPipeline, mergeProjectProgress, runningPipelines } from '../../server/pipeline.js'
 
-const PROMPT = { metrics: [{ name: 'NPV', weight: 1 }] }
+const PROMPT = { metrics: [{ id: 'executive', name: 'Резюме для руководства', weight: 1 }] }
 
 function project(extra = {}) {
   return { id: 'p1', name: 'Мост', status: 'processing', documents: [], ...extra }
@@ -35,10 +35,10 @@ describe('mergeProjectProgress', () => {
     expect(next.extractedByLlm).toBe(true)
   })
 
-  it('ранжирование считается по весам метрик', () => {
+  it('ранжирование считается по весам разделов', () => {
     const next = mergeProjectProgress(
       project(),
-      { stage: 'done', extracted: { note: { financials: [{ metric: 'NPV', score: 84 }] } } },
+      { stage: 'done', extracted: { note: { sectionScores: { executive: 84 } } } },
       PROMPT,
     )
     expect(next.concessionScore).toBe(84)

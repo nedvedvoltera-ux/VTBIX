@@ -162,13 +162,14 @@ describe('buildMasterInstructions', () => {
     expect(weird).toBe(plain)
   })
 
-  it('метрики выводятся с весами, иначе список по умолчанию', () => {
-    const withMetrics = buildMasterInstructions({ metrics: [{ name: 'NPV', weight: 30 }, { name: 'DSCR' }] })
-    expect(withMetrics).toContain('NPV — вес 30')
-    expect(withMetrics).toContain('DSCR — вес 10')
+  it('метрики выводятся с весами, иначе веса разделов', () => {
+    const withMetrics = buildMasterInstructions({ metrics: [{ name: 'Резюме для руководства', weight: 30 }, { name: 'Риски' }] })
+    expect(withMetrics).toContain('Резюме для руководства — вес 30')
+    expect(withMetrics).toContain('Риски — вес 10')
 
     const without = buildMasterInstructions({ metrics: [] })
-    expect(without).toContain('NPV, IRR, DPP, WACC, EBITDA margin, DSCR')
+    expect(without).toContain('веса задаются по включённым разделам записки')
+    expect(without).not.toContain('EBITDA')
   })
 
   it('приоритет пояснений сотрудника переключается', () => {

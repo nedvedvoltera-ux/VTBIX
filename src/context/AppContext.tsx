@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { apiHealth, deleteProject, fetchProjects, fetchPrompt, putProject, putPrompt } from '../api/client'
 import { DEFAULT_PROMPT, SEED_PROJECT_IDS } from '../data/mock'
 import type { Project, PromptConfig } from '../types'
-import { hydratePrompt, normalizeMetrics } from '../utils/concession'
+import { hydratePrompt } from '../utils/concession'
 import { uid } from '../utils/format'
 import { useAuth } from './AuthContext'
 
@@ -143,7 +143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setPrompt = useCallback((next: PromptConfig) => {
-    const hydrated = { ...next, metrics: normalizeMetrics(next.metrics) }
+    const hydrated = hydratePrompt(next, DEFAULT_PROMPT)
     setPromptState(hydrated)
     if (apiOnlineRef.current) void putPrompt(hydrated)
   }, [])

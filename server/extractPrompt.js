@@ -1,15 +1,85 @@
-import { buildMasterInstructions, CONCESSION_TERM_ITEMS, normalizeTermRows, termsSchemaObject } from './promptMaster.js'
+import { buildMasterInstructions, CONCESSION_TERM_ITEMS, normalizeTermRows, PROMPT_SECTIONS, termsSchemaObject } from './promptMaster.js'
+
+const LEGACY_KPI = new Set(['npv', 'irr', 'dpp', 'wacc', 'ebitda', 'ebitdamargin', 'dscr'])
+
+function fold(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[^a-zа-я0-9]+/gi, '')
+}
 
 function metricList(prompt) {
   const raw = Array.isArray(prompt?.metrics) ? prompt.metrics : []
   return raw
     .map((item) => (typeof item === 'string' ? { name: item, weight: 10 } : item))
-    .filter((item) => item?.name)
+    .filter((item) => item?.name || item?.id)
+}
+
+function resolveSection(item) {
+  const id = String(item?.id || '').trim()
+  if (id) {
+    const hit = PROMPT_SECTIONS.find((section) => section.id === id)
+    if (hit) return hit
+  }
+  const key = fold(item?.name)
+  if (!key) return null
+  return PROMPT_SECTIONS.find((section) => section.id === key || fold(section.title) === key) || null
+}
+
+export function rankingMetrics(prompt) {
+  const raw = metricList(prompt)
+  const fromPrompt = raw
+    .map((item) => {
+      const section = resolveSection(item)
+      if (!section) return null
+      const weight = Number(item.weight)
+      return { id: section.id, name: section.title, weight: Number.isFinite(weight) ? weight : 10 }
+    })
+    .filter(Boolean)
+  if (fromPrompt.length) return fromPrompt
+  const legacy = raw.filter((item) => LEGACY_KPI.has(fold(item.name)))
+  if (legacy.length) {
+    return legacy.map((item) => {
+      const weight = Number(item.weight)
+      return { id: fold(item.name), name: item.name, weight: Number.isFinite(weight) ? weight : 10 }
+    })
+  }
+  return PROMPT_SECTIONS.filter((section) => prompt?.sections?.[section.id] !== false).map((section) => ({
+    id: section.id,
+    name: section.title,
+    weight: 10,
+  }))
+}
+
+export function parseSectionScores(raw) {
+  const out = {}
+  const put = (hint, score) => {
+    const section = resolveSection({ id: hint, name: hint })
+    const num = Number(score)
+    if (!section || !Number.isFinite(num)) return
+    out[section.id] = Math.min(100, Math.max(0, Math.round(num)))
+  }
+  if (Array.isArray(raw)) {
+    for (const row of raw) {
+      if (!row || typeof row !== 'object') continue
+      const section = resolveSection({ id: row.id, name: row.name || row.metric })
+      if (section) put(section.id, row.score)
+    }
+    return out
+  }
+  if (raw && typeof raw === 'object') {
+    for (const [key, value] of Object.entries(raw)) {
+      if (value && typeof value === 'object' && 'score' in value) put(key, value.score)
+      else put(key, value)
+    }
+  }
+  return out
 }
 
 export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
-  const metrics = metricList(prompt)
-  const metricNames = metrics.length ? metrics.map((item) => item.name) : ['NPV', 'IRR', 'DPP']
+  const metrics = rankingMetrics(prompt)
+  const sectionScores = Object.fromEntries(metrics.map((item) => [item.id, 0]))
 
   const schema = {
     terms: termsSchemaObject(),
@@ -36,13 +106,7 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
       industryContext: 'string',
       location: 'string',
       budgetBreakdown: 'string',
-      financials: metricNames.map((name) => ({
-        metric: name,
-        value: 'string',
-        comment: 'string',
-        score: 0,
-      })),
-      scenarios: [{ name: 'Базовый', npv: 'string', irr: 'string' }],
+      sectionScores,
       risks: [{ title: 'string', level: 'low | mid | high', text: 'string' }],
       recommendation: 'string',
     },
@@ -75,19 +139,29 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
   return { systemPrompt, userPrompt }
 }
 
-function rankFromNote(note, prompt) {
+function lookupScore(note, metric) {
+  const scores = parseSectionScores(note?.sectionScores)
+  if (Number.isFinite(scores[metric.id])) return scores[metric.id]
   const rows = Array.isArray(note?.financials) ? note.financials : []
-  const metrics = metricList(prompt)
+  const names = [metric.name, metric.id]
+  const row = rows.find((item) => {
+    const label = String(item?.metric || '').toLowerCase()
+    return names.some((name) => label && (label.includes(String(name).toLowerCase()) || String(name).toLowerCase().includes(label)))
+  })
+  const score = Number(row?.score)
+  return Number.isFinite(score) ? Math.min(100, Math.max(0, Math.round(score))) : null
+}
+
+function rankFromNote(note, prompt) {
+  const metrics = rankingMetrics(prompt)
   let weighted = 0
   let weightSum = 0
   for (const metric of metrics) {
     const weight = Number(metric.weight)
     if (!Number.isFinite(weight) || weight <= 0) continue
-    const row = rows.find((item) => String(item?.metric || '').toLowerCase().includes(String(metric.name).toLowerCase()) || String(metric.name).toLowerCase().includes(String(item?.metric || '').toLowerCase()))
-    const score = Number(row?.score)
-    if (!Number.isFinite(score)) continue
-    const clamped = Math.min(100, Math.max(0, Math.round(score)))
-    weighted += clamped * weight
+    const score = lookupScore(note, metric)
+    if (score == null) continue
+    weighted += score * weight
     weightSum += weight
   }
   if (weightSum <= 0) return null
@@ -126,6 +200,7 @@ export function applyExtraction(project, data, prompt) {
       terms: data.note.terms ?? data.terms,
       assessment: data.note.assessment ?? data.assessment,
       riskBalance: data.note.riskBalance ?? data.riskBalance,
+      sectionScores: data.note.sectionScores ?? data.sectionScores,
     })
   } else if (data.terms || data.assessment || data.riskBalance || data.description) {
     next.note = mergeNote(project.note, {
@@ -134,6 +209,7 @@ export function applyExtraction(project, data, prompt) {
       terms: data.terms,
       assessment: data.assessment,
       riskBalance: data.riskBalance,
+      sectionScores: data.sectionScores,
     })
   }
   next.extractedByLlm = true
@@ -164,6 +240,7 @@ function mergeNote(current, incoming) {
     riskBalance: { exceptions: '', statement: '' },
     terms: emptyTerms(),
     assessment: { imperativeLaw: '', executionRealism: '', investorFinance: '' },
+    sectionScores: {},
   }
   return {
     executiveSummary: pickText(incoming.executiveSummary, base.executiveSummary),
@@ -182,6 +259,7 @@ function mergeNote(current, incoming) {
       executionRealism: pickText(incoming.assessment?.executionRealism, base.assessment?.executionRealism),
       investorFinance: pickText(incoming.assessment?.investorFinance, base.assessment?.investorFinance),
     },
+    sectionScores: { ...parseSectionScores(base.sectionScores), ...parseSectionScores(incoming.sectionScores) },
   }
 }
 

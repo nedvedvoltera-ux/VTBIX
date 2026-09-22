@@ -1,5 +1,6 @@
 import { COUNTRIES, INDUSTRIES, REGIONS_BY_COUNTRY } from '../data/mock'
 import { emptyConcessionTerms } from '../data/ksTerms'
+import { PROMPT_SECTIONS } from '../data/promptSections'
 import { REGION_RATINGS } from '../data/regions'
 import type { AnalyticalNote, ConcessionFit, Project, Recommendation } from '../types'
 import { clampScore } from '../utils/concession'
@@ -29,6 +30,7 @@ export const EMPTY_NOTE: AnalyticalNote = {
   riskBalance: { exceptions: '', statement: '' },
   terms: emptyConcessionTerms(),
   assessment: { imperativeLaw: '', executionRealism: '', investorFinance: '' },
+  sectionScores: {},
 }
 
 function regionOptions(country: string, current: string) {
@@ -196,110 +198,25 @@ export function NoteFields({
       </label>
 
       <div className="field">
-        Финансовые метрики
-        {note.financials.map((row, index) => (
-          <div className="inline-add inline-add--metrics" key={`fin-${index}`}>
-            <input
-              placeholder="Метрика"
-              value={row.metric}
-              onChange={(e) =>
-                patch(
-                  'financials',
-                  note.financials.map((item, i) => (i === index ? { ...item, metric: e.target.value } : item)),
-                )
-              }
-            />
-            <input
-              placeholder="Значение"
-              value={row.value}
-              onChange={(e) =>
-                patch(
-                  'financials',
-                  note.financials.map((item, i) => (i === index ? { ...item, value: e.target.value } : item)),
-                )
-              }
-            />
+        Баллы разделов (0–100)
+        {PROMPT_SECTIONS.map((section) => (
+          <div className="inline-add" key={section.id}>
+            <span className="field-label" style={{ alignSelf: 'center', minWidth: '40%' }}>{section.title}</span>
             <input
               type="number"
               min={0}
               max={100}
-              placeholder="Балл 0–100"
-              value={row.score ?? ''}
-              onChange={(e) =>
-                patch(
-                  'financials',
-                  note.financials.map((item, i) =>
-                    i === index
-                      ? { ...item, score: e.target.value === '' ? undefined : clampScore(Number(e.target.value)) }
-                      : item,
-                  ),
-                )
-              }
-            />
-            <input
-              placeholder="Комментарий"
-              value={row.comment}
-              onChange={(e) =>
-                patch(
-                  'financials',
-                  note.financials.map((item, i) => (i === index ? { ...item, comment: e.target.value } : item)),
-                )
-              }
+              placeholder="нет балла"
+              value={note.sectionScores?.[section.id] ?? ''}
+              onChange={(e) => {
+                const next = { ...(note.sectionScores ?? {}) }
+                if (e.target.value === '') delete next[section.id]
+                else next[section.id] = clampScore(Number(e.target.value))
+                patch('sectionScores', next)
+              }}
             />
           </div>
         ))}
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={() => patch('financials', [...note.financials, { metric: '', value: '', comment: '', score: undefined }])}
-        >
-          Добавить метрику
-        </button>
-      </div>
-
-      <div className="field">
-        Сценарии
-        {note.scenarios.map((row, index) => (
-          <div className="inline-add" key={`sc-${index}`}>
-            <input
-              placeholder="Сценарий"
-              value={row.name}
-              onChange={(e) =>
-                patch(
-                  'scenarios',
-                  note.scenarios.map((item, i) => (i === index ? { ...item, name: e.target.value } : item)),
-                )
-              }
-            />
-            <input
-              placeholder="NPV"
-              value={row.npv}
-              onChange={(e) =>
-                patch(
-                  'scenarios',
-                  note.scenarios.map((item, i) => (i === index ? { ...item, npv: e.target.value } : item)),
-                )
-              }
-            />
-            <input
-              placeholder="IRR"
-              value={row.irr}
-              onChange={(e) =>
-                patch(
-                  'scenarios',
-                  note.scenarios.map((item, i) => (i === index ? { ...item, irr: e.target.value } : item)),
-                )
-              }
-            />
-          </div>
-        ))}
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={() => patch('scenarios', [...note.scenarios, { name: '', npv: '', irr: '' }])}
-        >
-          Добавить сценарий
-        </button>
       </div>
 
       <div className="field">

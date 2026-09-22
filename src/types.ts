@@ -23,6 +23,7 @@ export type FinancialRow = {
 }
 
 export type MetricWeight = {
+  id?: PromptSectionId
   name: string
   weight: number
 }
@@ -70,6 +71,7 @@ export type AnalyticalNote = {
   riskBalance?: RiskBalance
   terms?: TermRow[]
   assessment?: ProjectAssessment
+  sectionScores?: Partial<Record<PromptSectionId, number>>
 }
 
 export type ProjectDocument = {

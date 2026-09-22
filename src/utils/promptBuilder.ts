@@ -62,11 +62,11 @@ export function buildPromptPreview(config: PromptConfig, sample?: Project | null
     'Обязательные разделы:',
     ...enabled.map((section, index) => `${index + 1}. ${section.title} — ${section.hint}`),
     '',
-    `Обязательные метрики (вес = вклад в ранжирование выгодности): ${
+    `Балл 0–100 ставится по каждому включённому разделу записки. Вес раздела = вклад в рейтинг: ${
       config.metrics.length
         ? config.metrics.map((item) => `${item.name} — вес ${item.weight}`).join(', ')
         : 'не заданы'
-    }. Для каждой метрики укажи значение и балл привлекательности для концессионера от 0 до 100. Если метрика не считается из файла — укажи «недостаточно данных» и не выдумывай точность. Итоговый рейтинг объекта считается только после разбора LLM — взвешенное среднее баллов по заданным весам.`,
+    }. Если по разделу в документе нечего оценить — score не ставь. Итоговый рейтинг объекта — взвешенное среднее баллов включённых разделов после разбора LLM.`,
     '',
     'Порядок JSON: сначала terms (объект с ключами subject, object, term, constructionTerm, operationTerm, investmentVolume, capitalGrant, lostRevenue, violatorTravel, concessionFee, design, sitePreparation, landPlots, security, liability, terminationCompensation, specialCircumstances, directAgreement), затем riskBalance и assessment, затем description.',
     'Каждое условие КС — 1–4 предложения из Markdown либо «недостаточно данных». Три поля участия концедента заполняй отдельно.',

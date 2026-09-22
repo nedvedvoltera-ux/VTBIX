@@ -1,3 +1,5 @@
+import { rankingMetrics } from './extractPrompt.js'
+
 const TEMPLATES = [
   {
     test: /энерг|тэц|гэс|турбин|тепло/i,
@@ -140,17 +142,15 @@ export async function runLlmExtraction({ fileName, notes, prompt }) {
   }
 }
 
-function metricList(prompt) {
-  const raw = Array.isArray(prompt?.metrics) ? prompt.metrics : []
-  return raw
-    .map((item) => (typeof item === 'string' ? { name: item, weight: 10 } : item))
-    .filter((item) => item?.name)
-}
-
 export function buildReadyNote(project, prompt) {
-  const metrics = metricList(prompt)
-  const names = metrics.length ? metrics.map((item) => item.name) : ['NPV', 'IRR']
+  const metrics = rankingMetrics(prompt)
   const seed = project.score ?? 70
+  const sectionScores = Object.fromEntries(
+    metrics.map((item, index) => [
+      item.id,
+      Math.max(40, Math.min(95, seed - 6 + index * 2 + Math.round(Math.random() * 8))),
+    ]),
+  )
   return {
     executiveSummary: `Автоматический расчёт по «${project.name}» завершён. Бюджет ${
       project.budget ? `${(project.budget / 1_000_000_000).toFixed(1)} млрд ₽` : 'не указан'
@@ -159,16 +159,9 @@ export function buildReadyNote(project, prompt) {
     industryContext: `Отрасль: ${project.industry}. Контекст рынка подставлен из отраслевого справочника.`,
     location: [project.country, project.region].filter(Boolean).join(', '),
     budgetBreakdown: 'Структура CAPEX восстановлена укрупнённо. Детализация — в исходном файле.',
-    financials: names.map((name, index) => ({
-      metric: name,
-      value: 'расчёт выполнен',
-      comment: 'результат обработки',
-      score: Math.max(40, Math.min(95, seed - 6 + index * 3 + Math.round(Math.random() * 8))),
-    })),
-    scenarios: [
-      { name: 'Базовый', npv: 'положительный', irr: 'около hurdle' },
-      { name: 'Стресс', npv: 'на границе', irr: 'ниже hurdle' },
-    ],
+    sectionScores,
+    financials: [],
+    scenarios: [],
     risks: [
       { title: 'Качество исходных данных', level: 'mid', text: 'Часть полей извлечена моделью автоматически.' },
     ],

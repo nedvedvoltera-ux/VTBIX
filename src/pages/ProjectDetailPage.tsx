@@ -11,6 +11,7 @@ import { computeRanking } from '../utils/concession'
 import { analyzeProject, createCrmDeal, deleteProjectDocument, lookupCrmDeal, uploadProjectFiles } from '../api/client'
 import { projectDocuments } from '../utils/documents'
 import { displayConcessionTerms } from '../data/ksTerms'
+import { PROMPT_SECTIONS } from '../data/promptSections'
 import { markdownSummary, pipelineErrorTitle } from '../utils/pipelineStatus'
 
 function NoteView({ note, project }: { note: AnalyticalNote; project: Project }) {
@@ -102,54 +103,29 @@ function NoteView({ note, project }: { note: AnalyticalNote; project: Project })
         <h3>Бюджет</h3>
         <p>{note.budgetBreakdown}</p>
       </section>
+      {Object.values(note.sectionScores ?? {}).some((value) => value != null) && (
       <section>
-        <h3>Финансовые метрики</h3>
+        <h3>Баллы разделов</h3>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Метрика</th>
-                <th>Значение</th>
+                <th>Раздел</th>
                 <th>Балл</th>
-                <th>Комментарий</th>
               </tr>
             </thead>
             <tbody>
-              {note.financials.map((row, index) => (
-                <tr key={`${row.metric}-${index}`}>
-                  <td>{row.metric}</td>
-                  <td>{row.value}</td>
-                  <td>{row.score != null ? row.score : '—'}</td>
-                  <td>{row.comment}</td>
+              {PROMPT_SECTIONS.filter((section) => note.sectionScores?.[section.id] != null).map((section) => (
+                <tr key={section.id}>
+                  <td>{section.title}</td>
+                  <td>{note.sectionScores?.[section.id]}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </section>
-      <section>
-        <h3>Сценарии</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Сценарий</th>
-                <th>NPV</th>
-                <th>IRR</th>
-              </tr>
-            </thead>
-            <tbody>
-              {note.scenarios.map((row, index) => (
-                <tr key={`${row.name}-${index}`}>
-                  <td>{row.name}</td>
-                  <td>{row.npv}</td>
-                  <td>{row.irr}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      )}
       <section>
         <h3>Риски</h3>
         <ul className="risks">
@@ -364,7 +340,7 @@ export function ProjectDetailPage() {
                 {ranking.score != null ? ` · балл ${ranking.score}` : ''}
               </strong>
               {ranking.byMetrics ? (
-                <em className="hint">по весам метрик</em>
+                <em className="hint">по весам разделов</em>
               ) : project.concessionScore != null ? (
                 <em className="hint">балл карточки</em>
               ) : null}

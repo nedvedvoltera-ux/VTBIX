@@ -1,5 +1,8 @@
-import type { MetricWeight, Project, PromptConfig, PromptSectionId } from '../types'
-import { normalizeMetrics } from '../utils/concession'
+import type { Project, PromptConfig } from '../types'
+import { metricsFromSections } from '../utils/concession'
+import { PROMPT_SECTIONS } from './promptSections'
+
+export { PROMPT_SECTIONS }
 
 export const INDUSTRIES = [
   'Энергетика',
@@ -97,29 +100,6 @@ export const CRM_TOUCH_KINDS = [
   { id: 'other', label: 'Другое' },
 ] as const
 
-export const PROMPT_SECTIONS: { id: PromptSectionId; title: string; hint: string }[] = [
-  { id: 'executive', title: 'Резюме для руководства', hint: '1 страница: суть, цифры, рекомендация' },
-  { id: 'description', title: 'Описание проекта', hint: 'что строится, сроки; оценка закона, ПД/ЗУ и выгодности для инвестора' },
-  { id: 'industry', title: 'Отраслевой контекст', hint: 'рынок, конкуренция, регуляторика' },
-  { id: 'location', title: 'Локация и инфраструктура', hint: 'страна, регион, логистика, кадры' },
-  { id: 'budget', title: 'Бюджет и структура затрат', hint: 'CAPEX/OPEX, источники финансирования' },
-  { id: 'financials', title: 'Финансовая модель', hint: 'NPV, IRR, DPP, WACC, чувствительность' },
-  { id: 'scenarios', title: 'Сценарный анализ', hint: 'базовый / оптимистичный / стресс' },
-  { id: 'risks', title: 'Риски', hint: 'матрица вероятность × влияние' },
-  { id: 'comparables', title: 'Сравнение с аналогами', hint: 'benchmark по отрасли и региону' },
-  { id: 'esg', title: 'ESG и комплаенс', hint: 'экология, социальные эффекты, санкционный контур' },
-  { id: 'recommendation', title: 'Инвестиционная рекомендация', hint: 'инвестировать / доработать / отклонить' },
-]
-
-export const DEFAULT_METRICS: MetricWeight[] = normalizeMetrics([
-  { name: 'NPV', weight: 25 },
-  { name: 'IRR', weight: 25 },
-  { name: 'DPP', weight: 15 },
-  { name: 'WACC', weight: 10 },
-  { name: 'EBITDA margin', weight: 15 },
-  { name: 'DSCR', weight: 10 },
-])
-
 export const DEFAULT_PROMPT: PromptConfig = {
   role: 'Старший финансовый аналитик инвестиционного комитета. Готовишь служебную аналитическую записку для финансового отдела: без маркетинга, с проверяемыми допущениями и явными пробелами в исходных данных.',
   language: 'ru',
@@ -138,7 +118,7 @@ export const DEFAULT_PROMPT: PromptConfig = {
     esg: false,
     recommendation: true,
   },
-  metrics: DEFAULT_METRICS.map((item) => ({ ...item })),
+  metrics: [],
   useEmployeeNotes: true,
   includeComparables: true,
   includeEsg: false,
@@ -147,6 +127,8 @@ export const DEFAULT_PROMPT: PromptConfig = {
   extraInstructions:
     'Карточка КС важнее длинной записки. Сначала заполни terms по ключам (subject, object, term, constructionTerm, operationTerm, investmentVolume, capitalGrant, lostRevenue, violatorTravel, concessionFee, design, sitePreparation, landPlots, security, liability, terminationCompensation, specialCircumstances, directAgreement) только из Markdown. Три поля концедента не сливай. Описание проекта обязательно включает: императивные нормы закона; реалистичность при отсутствии/наличии ПД и ЗУ; финансовую целесообразность для инвестора. Баланс рисков — фраза «Проект КС представляется относительно сбалансированным по распределению рисков, за исключением условий о …».',
 }
+
+DEFAULT_PROMPT.metrics = metricsFromSections(DEFAULT_PROMPT.sections)
 
 export const INITIAL_PROJECTS: Project[] = [
   {

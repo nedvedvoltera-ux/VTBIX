@@ -4,8 +4,8 @@ import { applyExtraction, buildExtractionPrompts } from '../../server/extractPro
 
 const PROMPT = {
   metrics: [
-    { name: 'NPV', weight: 2 },
-    { name: 'IRR', weight: 1 },
+    { id: 'executive', name: 'Резюме для руководства', weight: 2 },
+    { id: 'risks', name: 'Риски', weight: 1 },
   ],
 }
 
@@ -38,22 +38,23 @@ describe('buildExtractionPrompts', () => {
     expect(one.userPrompt).not.toContain('Ниже несколько документов')
   })
 
-  it('схема повторяет заданные метрики', () => {
+  it('схема просит баллы по разделам записки', () => {
     const { userPrompt } = buildExtractionPrompts({ prompt: PROMPT, markdown: 'md' })
     const schema = JSON.parse(userPrompt.slice(userPrompt.indexOf('{'), userPrompt.lastIndexOf('}') + 1))
-    expect(schema.note.financials.map((row) => row.metric)).toEqual(['NPV', 'IRR'])
+    expect(schema.note.sectionScores).toEqual({ executive: 0, risks: 0 })
     expect(Object.keys(schema.terms)).toHaveLength(18)
   })
 
-  it('без метрик берёт NPV, IRR, DPP', () => {
+  it('без метрик берёт включённые разделы', () => {
     const { userPrompt } = buildExtractionPrompts({ prompt: {}, markdown: 'md' })
-    expect(userPrompt).toContain('"metric": "NPV"')
-    expect(userPrompt).toContain('"metric": "DPP"')
+    expect(userPrompt).toContain('"executive": 0')
+    expect(userPrompt).toContain('"recommendation": 0')
+    expect(userPrompt).not.toContain('"metric": "NPV"')
   })
 
-  it('метрики строками тоже принимаются', () => {
-    const { userPrompt } = buildExtractionPrompts({ prompt: { metrics: ['DSCR'] }, markdown: 'md' })
-    expect(userPrompt).toContain('"metric": "DSCR"')
+  it('метрики строками с id раздела принимаются', () => {
+    const { userPrompt } = buildExtractionPrompts({ prompt: { metrics: ['executive'] }, markdown: 'md' })
+    expect(userPrompt).toContain('"executive": 0')
   })
 })
 
@@ -109,15 +110,12 @@ describe('applyExtraction', () => {
     expect(applyExtraction(base, { score: 71.6 }, PROMPT).score).toBe(72)
   })
 
-  it('ранжирует по весам метрик из записки', () => {
+  it('ранжирует по весам разделов из записки', () => {
     const next = applyExtraction(
       base,
       {
         note: {
-          financials: [
-            { metric: 'NPV', score: 90 },
-            { metric: 'IRR', score: 60 },
-          ],
+          sectionScores: { executive: 90, risks: 60 },
         },
       },
       PROMPT,
@@ -128,28 +126,28 @@ describe('applyExtraction', () => {
   })
 
   it('порог среднего и невыгодного', () => {
-    const mid = applyExtraction(base, { note: { financials: [{ metric: 'NPV', score: 60 }] } }, { metrics: [{ name: 'NPV', weight: 1 }] })
+    const mid = applyExtraction(base, { note: { sectionScores: { executive: 60 } } }, { metrics: [{ id: 'executive', name: 'Резюме для руководства', weight: 1 }] })
     expect(mid.concessionFit).toBe('average')
 
-    const bad = applyExtraction(base, { note: { financials: [{ metric: 'NPV', score: 30 }] } }, { metrics: [{ name: 'NPV', weight: 1 }] })
+    const bad = applyExtraction(base, { note: { sectionScores: { executive: 30 } } }, { metrics: [{ id: 'executive', name: 'Резюме для руководства', weight: 1 }] })
     expect(bad.concessionFit).toBe('unfavorable')
   })
 
   it('явный балл не перетирается ранжированием', () => {
-    const next = applyExtraction(base, { score: 50, note: { financials: [{ metric: 'NPV', score: 90 }] } }, PROMPT)
+    const next = applyExtraction(base, { score: 50, note: { sectionScores: { executive: 90 } } }, PROMPT)
     expect(next.score).toBe(50)
     expect(next.concessionScore).toBe(90)
   })
 
   it('нулевые веса не дают ранга', () => {
-    const next = applyExtraction(base, { note: { financials: [{ metric: 'NPV', score: 90 }] } }, { metrics: [{ name: 'NPV', weight: 0 }] })
+    const next = applyExtraction(base, { note: { sectionScores: { executive: 90 } } }, { metrics: [{ id: 'executive', name: 'Резюме для руководства', weight: 0 }] })
     expect(next.concessionScore).toBeUndefined()
   })
 
-  it('метрика без балла в ранг не идёт', () => {
+  it('раздел без балла в ранг не идёт', () => {
     const next = applyExtraction(
       base,
-      { note: { financials: [{ metric: 'NPV', score: 90 }, { metric: 'IRR', value: 'недостаточно данных' }] } },
+      { note: { sectionScores: { executive: 90 } } },
       PROMPT,
     )
     expect(next.concessionScore).toBe(90)

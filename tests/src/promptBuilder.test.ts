@@ -34,8 +34,8 @@ describe('buildPromptPreview', () => {
   })
 
   it('метрики выводятся с весами', () => {
-    const text = buildPromptPreview(config({ metrics: [{ name: 'NPV', weight: 30 }, { name: 'DSCR', weight: 20 }] }))
-    expect(text).toContain('NPV — вес 30, DSCR — вес 20')
+    const text = buildPromptPreview(config({ metrics: [{ name: 'Резюме для руководства', weight: 30 }, { name: 'Риски', weight: 20 }] }))
+    expect(text).toContain('Резюме для руководства — вес 30, Риски — вес 20')
   })
 
   it('без метрик пишет «не заданы»', () => {

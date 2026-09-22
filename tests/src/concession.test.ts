@@ -106,9 +106,16 @@ describe('normalizeMetrics', () => {
 
   it('строки превращаются в метрики с типовым весом', () => {
     expect(normalizeMetrics(['NPV', 'DSCR'])).toEqual([
-      { name: 'NPV', weight: 25 },
+      { name: 'NPV', weight: 10 },
       { name: 'DSCR', weight: 10 },
     ])
+  })
+
+  it('название раздела записки получает id раздела', () => {
+    const list = normalizeMetrics(['Резюме для руководства'])
+    expect(list[0].id).toBe('executive')
+    expect(list[0].name).toBe('Резюме для руководства')
+    expect(list[0].weight).toBe(10)
   })
 
   it('неизвестная метрика получает вес по умолчанию', () => {
@@ -147,20 +154,23 @@ describe('hydratePrompt', () => {
     expect(next.metrics).toEqual(DEFAULT_PROMPT.metrics)
   })
 
-  it('свои метрики нормализуются', () => {
+  it('старые KPI NPV/IRR заменяются разделами записки', () => {
     const next = hydratePrompt({ metrics: ['NPV', 'NPV'] as never }, DEFAULT_PROMPT)
-    expect(next.metrics).toEqual([{ name: 'NPV', weight: 25 }])
+    expect(next.metrics.some((item) => item.id === 'executive')).toBe(true)
+    expect(next.metrics.some((item) => item.name === 'NPV')).toBe(false)
   })
 
-  it('пустой массив метрик уважается', () => {
-    expect(hydratePrompt({ metrics: [] }, DEFAULT_PROMPT).metrics).toEqual([])
+  it('пустой массив метрик тоже собирает разделы', () => {
+    expect(hydratePrompt({ metrics: [] }, DEFAULT_PROMPT).metrics.map((item) => item.id)).toEqual(
+      DEFAULT_PROMPT.metrics.map((item) => item.id),
+    )
   })
 })
 
 describe('computeRanking', () => {
   const metrics = [
-    { name: 'NPV', weight: 2 },
-    { name: 'IRR', weight: 1 },
+    { id: 'executive' as const, name: 'Резюме для руководства', weight: 2 },
+    { id: 'risks' as const, name: 'Риски', weight: 1 },
   ]
 
   it('проект без разбора моделью не ранжируется', () => {
@@ -172,9 +182,9 @@ describe('computeRanking', () => {
     expect(computeRanking(readyProject({ status: 'processing' }), metrics).score).toBeUndefined()
   })
 
-  it('взвешенное среднее по метрикам', () => {
+  it('взвешенное среднее по баллам разделов', () => {
     const project = readyProject({
-      note: { financials: [{ metric: 'NPV', value: '', score: 90 }, { metric: 'IRR', value: '', score: 60 }] },
+      note: { sectionScores: { executive: 90, risks: 60 } },
     } as Partial<Project>)
     const result = computeRanking(project, metrics)
     expect(result.score).toBe(80)
@@ -182,21 +192,21 @@ describe('computeRanking', () => {
     expect(result.byMetrics).toBe(true)
     expect(result.weightSum).toBe(3)
     expect(result.parts).toHaveLength(2)
-    expect(result.parts[0]).toEqual({ name: 'NPV', weight: 2, score: 90, contribution: 180 })
+    expect(result.parts[0]).toEqual({ name: 'Резюме для руководства', weight: 2, score: 90, contribution: 180 })
   })
 
   it('метрика с нулевым весом пропускается', () => {
     const project = readyProject({
-      note: { financials: [{ metric: 'NPV', value: '', score: 90 }] },
+      note: { sectionScores: { executive: 90 } },
     } as Partial<Project>)
-    const result = computeRanking(project, [{ name: 'NPV', weight: 0 }])
+    const result = computeRanking(project, [{ id: 'executive', name: 'Резюме для руководства', weight: 0 }])
     expect(result.byMetrics).toBe(false)
     expect(result.parts).toEqual([])
   })
 
-  it('метрика без балла пропускается', () => {
+  it('раздел без балла пропускается', () => {
     const project = readyProject({
-      note: { financials: [{ metric: 'NPV', value: 'недостаточно данных' }, { metric: 'IRR', value: '', score: 70 }] },
+      note: { sectionScores: { risks: 70 } },
     } as Partial<Project>)
     const result = computeRanking(project, metrics)
     expect(result.score).toBe(70)
@@ -223,14 +233,14 @@ describe('computeRanking', () => {
 describe('applyRanking', () => {
   it('без ранга возвращает тот же объект', () => {
     const project = readyProject()
-    expect(applyRanking(project, [{ name: 'NPV', weight: 1 }])).toBe(project)
+    expect(applyRanking(project, [{ id: 'executive', name: 'Резюме для руководства', weight: 1 }])).toBe(project)
   })
 
   it('записывает балл и вывод в проект', () => {
     const project = readyProject({
-      note: { financials: [{ metric: 'NPV', value: '', score: 84 }] },
+      note: { sectionScores: { executive: 84 } },
     } as Partial<Project>)
-    const next = applyRanking(project, [{ name: 'NPV', weight: 1 }])
+    const next = applyRanking(project, [{ id: 'executive', name: 'Резюме для руководства', weight: 1 }])
     expect(next.concessionScore).toBe(84)
     expect(next.concessionFit).toBe('advantageous')
     expect(project.concessionScore).toBeUndefined()
