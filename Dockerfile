@@ -10,7 +10,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=8080
 ENV DATA_DIR=/app/data
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+# LibreOffice нужен, чтобы .doc/.xls (Word/Excel 97–2003) превратить в OOXML
+# до отправки в Docling: официальный образ docling-serve без soffice эти форматы не читает.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    libreoffice-writer-nogui libreoffice-calc-nogui \
+    fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

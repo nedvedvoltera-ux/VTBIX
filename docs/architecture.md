@@ -1,6 +1,6 @@
 # VTBIH — архитектурная документация
 
-Версия системы: **1.5.1**. Документ описывает фактическую реализацию в репозитории, а не целевое состояние.
+Версия системы: **1.5.2**. Документ описывает фактическую реализацию в репозитории, а не целевое состояние.
 
 Смежные документы: [руководство пользователя](user-guide.md), [развёртывание](deployment.md).
 
@@ -51,7 +51,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph host["Хост Docker · сеть vtbih_default"]
-        api["api<br/>vtbih-api:1.5.1<br/>Node 22 · Express 5<br/>порт 8080"]
+        api["api<br/>vtbih-api:1.5.2<br/>Node 22 · Express 5<br/>порт 8080"]
         pg["postgres<br/>postgres:16-alpine<br/>порт 5432, внутренний"]
         dl["docling<br/>docling-serve:latest<br/>порт 5001"]
     end
@@ -337,7 +337,7 @@ erDiagram
 
 `docling.js` реализует полный цикл: `POST /v1/convert/file/async` → чтение `task_id` из тела или заголовка → опрос `GET /v1/status/poll/{id}?wait=5` раз в 2 секунды → `GET /v1/result/{id}`. Есть переход на синхронный `POST /v1/convert/file`, если асинхронный эндпоинт отсутствует.
 
-Форматы `.csv`, `.md`, `.txt` до Docling не доходят — читаются с диска напрямую (`docling.js:124-127`).
+Форматы `.csv`, `.md`, `.txt` до Docling не доходят — читаются с диска напрямую. Старые `.doc` и `.xls` (Word/Excel 97–2003) официальный образ `docling-serve` без LibreOffice не читает: API сначала переводит их в `.docx`/`.xlsx` через `soffice` (`legacyOffice.js`), и уже OOXML уходит в Docling. В образ API поэтому ставятся `libreoffice-writer-nogui` и `libreoffice-calc-nogui`.
 
 Поля формы (`buildForm:42-57`): `to_formats=md`, `table_mode=accurate`, `image_export_mode=placeholder`, `abort_on_error=false`. Для PDF дополнительно `do_ocr=true` и два поля `ocr_lang` — `ru` и `en`. Движок OCR явно не задаётся, используется стандартный EasyOCR, **и это создаёт эксплуатационное требование**: в образе `docling-serve:latest` нет кириллической модели `cyrillic_g2.pth`, а загрузка в рантайме отключена. Модель докачивается один раз в том `vtbih-docling-models`, см. [развёртывание](deployment.md#шаг-3-кириллическая-модель-ocr-обязательно).
 
@@ -419,11 +419,12 @@ erDiagram
 
 ## 15. Тесты
 
-Vitest, 22 файла, 423 теста, запуск `npm test`. Конфигурация в `vitest.config.ts`, тесты вынесены в отдельный каталог `tests/`, чтобы не попадать под `include` в `tsconfig` и не ломать `npm run build`.
+Vitest, 23 файла, 436 тестов, запуск `npm test`. Конфигурация в `vitest.config.ts`, тесты вынесены в отдельный каталог `tests/`, чтобы не попадать под `include` в `tsconfig` и не ломать `npm run build`.
 
 ```
-tests/server/  — 13 файлов: конвейер, промпты, извлечение, документы,
-                 ошибки, конфиг, события, CRM, авторизация, починка JSON
+tests/server/  — 14 файлов: конвейер, промпты, извлечение, документы,
+                 ошибки, конфиг, события, CRM, авторизация, починка JSON,
+                 перевод .doc/.xls через LibreOffice
 tests/src/     —  9 файлов: расчёт концессии, форматирование, документы,
                  статусы, условия КС, мастер промпта, демо CRM, регионы
 ```

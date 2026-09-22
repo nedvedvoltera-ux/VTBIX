@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { config } from './config.js'
 import { describeNetworkError, fetchOrThrow } from './httpErrors.js'
+import { isLegacyOffice, modernizeOfficeFile } from './legacyOffice.js'
 
 const MIME = {
   '.pdf': 'application/pdf',
@@ -113,7 +114,12 @@ async function pollTask(taskId, onProgress) {
     })
     if (DONE.has(status)) return payload
     if (FAILED.has(status)) {
-      throw new Error(`Docling не смог разобрать файл (status: ${status})`)
+      const detail = [payload?.error, payload?.message, payload?.task_meta?.error, payload?.status_message]
+        .filter(Boolean)
+        .map(String)
+        .join(' ')
+        .slice(0, 400)
+      throw new Error(`Docling не смог разобрать файл (status: ${status}${detail ? `; ${detail}` : ''})`)
     }
     await sleep(2000)
   }
@@ -130,58 +136,77 @@ export async function convertToMarkdown({ filePath, fileName, onProgress }) {
     throw new Error('Docling не задан: укажите DOCLING_URL в .env')
   }
 
-  await onProgress?.({
-    stage: 'converting',
-    progress: 10,
-    message: 'Документ отправлен в Docling…',
-  })
-
-  const form = await buildForm(filePath, fileName)
-  const queued = await fetchOrThrow(
-    `${config.doclingUrl}/v1/convert/file/async`,
-    {
-      method: 'POST',
-      body: form,
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(60_000),
-    },
-    'Docling',
-  )
-
-  let payload
-  if (queued.status === 404) {
-    payload = await convertSync(filePath, fileName)
-  } else if (!queued.ok) {
-    const body = await queued.text().catch(() => '')
-    throw new Error(`Docling ${queued.status}: ${body.slice(0, 400) || queued.statusText}`)
-  } else {
-    const accepted = await queued.json().catch(() => ({}))
-    const id = taskIdFrom(accepted, queued)
-    if (!id) {
-      payload = accepted?.document ? accepted : await convertSync(filePath, fileName)
-    } else {
-      await pollTask(id, onProgress)
-      const result = await fetchOrThrow(
-        `${config.doclingUrl}/v1/result/${encodeURIComponent(id)}`,
-        {
-          headers: { Accept: 'application/json' },
-          signal: AbortSignal.timeout(60_000),
-        },
-        'Docling',
-      )
-      if (!result.ok) {
-        const body = await result.text().catch(() => '')
-        throw new Error(`Docling result ${result.status}: ${body.slice(0, 400) || result.statusText}`)
-      }
-      payload = await result.json()
+  let sendPath = filePath
+  let sendName = fileName
+  let tmpDir = null
+  try {
+    if (isLegacyOffice(fileName)) {
+      await onProgress?.({
+        stage: 'converting',
+        progress: 8,
+        message: `LibreOffice переводит ${fileName} в современный формат…`,
+      })
+      const modern = await modernizeOfficeFile(filePath, fileName)
+      sendPath = modern.filePath
+      sendName = modern.fileName
+      tmpDir = modern.tmpDir
     }
-  }
 
-  const markdown = markdownFromPayload(payload)
-  if (!markdown.trim()) {
-    throw new Error(`Docling вернул пустой Markdown (status: ${payload?.status || 'empty'})`)
+    await onProgress?.({
+      stage: 'converting',
+      progress: 10,
+      message: 'Документ отправлен в Docling…',
+    })
+
+    const form = await buildForm(sendPath, sendName)
+    const queued = await fetchOrThrow(
+      `${config.doclingUrl}/v1/convert/file/async`,
+      {
+        method: 'POST',
+        body: form,
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(60_000),
+      },
+      'Docling',
+    )
+
+    let payload
+    if (queued.status === 404) {
+      payload = await convertSync(sendPath, sendName)
+    } else if (!queued.ok) {
+      const body = await queued.text().catch(() => '')
+      throw new Error(`Docling ${queued.status}: ${body.slice(0, 400) || queued.statusText}`)
+    } else {
+      const accepted = await queued.json().catch(() => ({}))
+      const id = taskIdFrom(accepted, queued)
+      if (!id) {
+        payload = accepted?.document ? accepted : await convertSync(sendPath, sendName)
+      } else {
+        await pollTask(id, onProgress)
+        const result = await fetchOrThrow(
+          `${config.doclingUrl}/v1/result/${encodeURIComponent(id)}`,
+          {
+            headers: { Accept: 'application/json' },
+            signal: AbortSignal.timeout(60_000),
+          },
+          'Docling',
+        )
+        if (!result.ok) {
+          const body = await result.text().catch(() => '')
+          throw new Error(`Docling result ${result.status}: ${body.slice(0, 400) || result.statusText}`)
+        }
+        payload = await result.json()
+      }
+    }
+
+    const markdown = markdownFromPayload(payload)
+    if (!markdown.trim()) {
+      throw new Error(`Docling вернул пустой Markdown (status: ${payload?.status || 'empty'})`)
+    }
+    return markdown
+  } finally {
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
   }
-  return markdown
 }
 
 export async function pingDocling() {
