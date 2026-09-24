@@ -76,6 +76,11 @@ export type LlmSettings = {
     configured: boolean
     url: string
     model: string
+    savedUrl: string
+    savedModel: string
+    defaultUrl: string
+    defaultModel: string
+    overridden: boolean
   }
   providers: LlmProviderOption[]
   active: {
@@ -229,6 +234,8 @@ export function putLlmSettings(payload: {
   baseUrl?: string
   apiKey?: string
   clearApiKey?: boolean
+  localUrl?: string
+  localModel?: string
 }) {
   return request<LlmSettings>('/settings/llm', {
     method: 'PUT',

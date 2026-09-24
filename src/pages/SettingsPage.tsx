@@ -12,10 +12,12 @@ type FormState = {
   model: string
   baseUrl: string
   apiKey: string
+  localUrl: string
+  localModel: string
 }
 
 function emptyForm(): FormState {
-  return { source: 'local', provider: 'openai', model: '', baseUrl: '', apiKey: '' }
+  return { source: 'local', provider: 'openai', model: '', baseUrl: '', apiKey: '', localUrl: '', localModel: '' }
 }
 
 function formFromSettings(settings: LlmSettings): FormState {
@@ -25,6 +27,8 @@ function formFromSettings(settings: LlmSettings): FormState {
     model: settings.model || '',
     baseUrl: settings.baseUrl || '',
     apiKey: '',
+    localUrl: settings.local.savedUrl || settings.local.url || '',
+    localModel: settings.local.savedModel || settings.local.model || '',
   }
 }
 
@@ -89,7 +93,12 @@ export function SettingsPage() {
     try {
       const payload =
         form.source === 'local'
-          ? { source: 'local' as const, ...extra }
+          ? {
+              source: 'local' as const,
+              localUrl: form.localUrl,
+              localModel: form.localModel,
+              ...extra,
+            }
           : {
               source: 'cloud' as const,
               provider: form.provider,
@@ -201,27 +210,45 @@ export function SettingsPage() {
             </div>
             <p className="hint">
               {form.source === 'local'
-                ? 'Используется офисная Qwen из .env. Ключ коммерческой сети здесь не нужен.'
+                ? 'Адрес и имя модели сохраняются в базе этого стенда. Пустые поля возвращают значения из .env.'
                 : 'Запросы уходят во внешнюю коммерческую сеть. Ключ хранится в PostgreSQL на сервере, в интерфейс целиком не возвращается.'}
             </p>
           </div>
 
           {form.source === 'local' ? (
             <div className="card settings-block">
-              <h2>Локальная Qwen</h2>
-              <p className="hint">Адрес и имя модели задаются при деплое. Сменить их можно в .env / docker-compose.</p>
+              <h2>Модель этого стенда</h2>
+              <p className="hint">
+                У каждого стенда свои адрес API и имя модели. Значение пишется в базу стенда и не уезжает на другие установки.
+              </p>
               <div className="filter-row">
                 <label className="field">
-                  URL
-                  <input readOnly value={settings?.local.url || 'не задан'} />
+                  Адрес API
+                  <input
+                    placeholder={settings?.local.defaultUrl || 'http://host:9080/v1'}
+                    value={form.localUrl}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => patch({ localUrl: e.target.value })}
+                  />
                 </label>
                 <label className="field">
-                  Модель
-                  <input readOnly value={settings?.local.model || 'не задана'} />
+                  Имя модели
+                  <input
+                    placeholder={settings?.local.defaultModel || 'Qwen/Qwen3.5-35B-A3B-FP8'}
+                    value={form.localModel}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => patch({ localModel: e.target.value })}
+                  />
                 </label>
               </div>
-              {!settings?.local.configured && (
-                <p className="hint">SUMMARY_API_BASE_URL не задан — локальная модель сейчас недоступна.</p>
+              <p className="hint">
+                Из окружения стенда: {settings?.local.defaultUrl || 'адрес не задан'}
+                {settings?.local.defaultModel ? ` · ${settings.local.defaultModel}` : ''}
+              </p>
+              {!settings?.local.configured && !form.localUrl.trim() && (
+                <p className="hint">Адрес API не задан — локальная модель сейчас недоступна.</p>
               )}
             </div>
           ) : (

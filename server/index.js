@@ -187,8 +187,8 @@ function startPipelineJob({ jobId, project, mode, documents, notes, prompt }) {
                   status: 'done',
                   extracted_json: payload.extracted ? JSON.stringify(payload.extracted) : null,
                   response_json: JSON.stringify({
-                    provider: payload.extract === false ? 'docling' : config.llmApiUrl ? 'qwen' : 'heuristic',
-                    model: config.llmModel,
+                    provider: payload.extract === false ? 'docling' : resolveLlmRuntime().configured ? 'qwen' : 'heuristic',
+                    model: resolveLlmRuntime().model,
                     mode,
                     files: (next.documents || []).map((item) => item.fileName),
                   }),

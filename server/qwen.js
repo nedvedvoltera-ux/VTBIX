@@ -59,7 +59,7 @@ function notConfiguredError(runtime) {
     const missing = (runtime.missing || []).join(', ') || 'API-ключ'
     return `Облачная LLM не настроена: укажите ${missing} в Настройках`
   }
-  return 'Локальная LLM не задана: укажите SUMMARY_API_BASE_URL в .env или выберите облако в Настройках'
+  return 'Локальная LLM не задана: укажите адрес API и имя модели в Настройках'
 }
 
 function buildHeaders(runtime) {

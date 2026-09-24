@@ -301,7 +301,7 @@ erDiagram
 
 `resolveLlmRuntime()` (`llmSettings.js:137-177`) возвращает один из двух вариантов.
 
-**Локальный** (по умолчанию): адрес и модель берутся из `.env` (`SUMMARY_API_BASE_URL`, `SUMMARY_MODEL`), ключ не обязателен. Только в этом режиме к запросу добавляются специфичные для vLLM поля `enable_thinking: false` и `chat_template_kwargs`, отключающие «размышления» у Qwen.
+**Локальный** (по умолчанию): адрес и имя модели задаются в Настройках и пишутся в `app_settings` этого стенда. Пустые поля возвращают значения из `.env` (`SUMMARY_API_BASE_URL`, `SUMMARY_MODEL`). Ключ не обязателен. Только в этом режиме к запросу добавляются специфичные для vLLM поля `enable_thinking: false` и `chat_template_kwargs`, отключающие «размышления» у Qwen.
 
 **Облачный**: провайдер выбирается в интерфейсе из каталога `LLM_PROVIDERS` (`llmSettings.js:4-93`) — OpenAI, Anthropic, Gemini, DeepSeek, Grok, Mistral, OpenRouter, произвольный совместимый endpoint. Ключ хранится в БД, не в `.env`.
 

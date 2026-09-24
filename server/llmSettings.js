@@ -105,6 +105,10 @@ function maskKey(key) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`
 }
 
+function text(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 export function getStoredLlmSettings() {
   const llm = getAppSettings().llm || {}
   const source = llm.source === 'cloud' ? 'cloud' : 'local'
@@ -112,9 +116,11 @@ export function getStoredLlmSettings() {
   return {
     source,
     provider,
-    model: typeof llm.model === 'string' ? llm.model.trim() : '',
+    model: text(llm.model),
     apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
-    baseUrl: typeof llm.baseUrl === 'string' ? llm.baseUrl.trim() : '',
+    baseUrl: text(llm.baseUrl),
+    localUrl: text(llm.localUrl),
+    localModel: text(llm.localModel),
   }
 }
 
@@ -126,6 +132,8 @@ export async function saveLlmSettings(patch = {}) {
     model: typeof patch.model === 'string' ? patch.model.trim() : current.model,
     apiKey: current.apiKey,
     baseUrl: typeof patch.baseUrl === 'string' ? patch.baseUrl.trim() : current.baseUrl,
+    localUrl: typeof patch.localUrl === 'string' ? patch.localUrl.trim() : current.localUrl,
+    localModel: typeof patch.localModel === 'string' ? patch.localModel.trim() : current.localModel,
   }
   if (patch.clearApiKey === true) next.apiKey = ''
   else if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) next.apiKey = patch.apiKey.trim()
@@ -137,18 +145,20 @@ export async function saveLlmSettings(patch = {}) {
 export function resolveLlmRuntime() {
   const stored = getStoredLlmSettings()
   if (stored.source !== 'cloud') {
+    const apiUrl = normalizeLlmBase(stored.localUrl || config.llmApiUrl)
+    const model = stored.localModel || config.llmModel
     return {
       source: 'local',
       provider: 'local',
-      label: 'Локальная Qwen',
+      label: 'Локальная модель',
       service: 'Qwen',
-      apiUrl: config.llmApiUrl,
+      apiUrl,
       apiKey: config.llmApiKey,
-      model: config.llmModel,
+      model,
       extras: true,
       protocol: 'openai',
       extraHeaders: {},
-      configured: Boolean(config.llmApiUrl),
+      configured: Boolean(apiUrl && model),
     }
   }
 
@@ -179,6 +189,8 @@ export function resolveLlmRuntime() {
 export function publicLlmSettings() {
   const stored = getStoredLlmSettings()
   const runtime = resolveLlmRuntime()
+  const localUrl = normalizeLlmBase(stored.localUrl || config.llmApiUrl)
+  const localModel = stored.localModel || config.llmModel
   return {
     source: stored.source,
     provider: stored.provider,
@@ -187,9 +199,14 @@ export function publicLlmSettings() {
     hasApiKey: Boolean(stored.apiKey),
     apiKeyMasked: maskKey(stored.apiKey),
     local: {
-      configured: Boolean(config.llmApiUrl),
-      url: config.llmApiUrl,
-      model: config.llmModel,
+      configured: Boolean(localUrl && localModel),
+      url: localUrl,
+      model: localModel,
+      savedUrl: stored.localUrl,
+      savedModel: stored.localModel,
+      defaultUrl: config.llmApiUrl,
+      defaultModel: config.llmModel,
+      overridden: Boolean(stored.localUrl || stored.localModel),
     },
     providers: LLM_PROVIDERS.map(({ extraHeaders, ...item }) => item),
     active: {
