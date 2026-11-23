@@ -54,7 +54,11 @@ export const config = {
   llmTemperature: Number.parseFloat(process.env.LLM_TEMPERATURE || process.env.SUMMARY_TEMPERATURE || '0.1') || 0.1,
   llmMaxTokens: num('LLM_MAX_TOKENS', num('SUMMARY_MAX_TOKENS', 8192)),
   llmTimeoutMs: num('LLM_TIMEOUT_MS', 300_000),
-  llmMaxDocChars: num('LLM_MAX_DOC_CHARS', 80_000),
+  // Размер одного чанка map-reduce. LLM_MAX_DOC_CHARS оставлен как алиас для совместимости.
+  llmChunkChars: num('LLM_CHUNK_CHARS', num('LLM_MAX_DOC_CHARS', 70_000)),
+  llmChunkOverlap: num('LLM_CHUNK_OVERLAP', 3_000),
+  /** @deprecated используйте llmChunkChars — больше не обрезает весь документ */
+  llmMaxDocChars: num('LLM_CHUNK_CHARS', num('LLM_MAX_DOC_CHARS', 70_000)),
   braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
 }
 

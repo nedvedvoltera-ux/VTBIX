@@ -38,6 +38,9 @@ describe('config', () => {
     expect(config.llmTimeoutMs).toBeGreaterThan(0)
     expect(config.llmMaxTokens).toBeGreaterThan(0)
     expect(config.llmMaxDocChars).toBeGreaterThan(0)
+    expect(config.llmChunkChars).toBeGreaterThan(0)
+    expect(config.llmChunkOverlap).toBeGreaterThan(0)
+    expect(config.llmChunkChars).toBe(config.llmMaxDocChars)
   })
 
   it('адрес модели уже нормализован', () => {

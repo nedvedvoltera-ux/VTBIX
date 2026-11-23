@@ -129,7 +129,7 @@ sequenceDiagram
 
     Note over U,DB: Режим 2 — extract. POST /api/projects/:id/analyze
     U->>API: нажатие «Пересобрать поля»
-    API->>API: склейка всех .md, обрезка до LLM_MAX_DOC_CHARS
+    API->>API: склейка всех .md, table-aware чанки LLM_CHUNK_CHARS (map-reduce, шапки таблиц повторяются)
     API->>LLM: POST /chat/completions, stream=true
     loop потоковый ответ
         LLM-->>API: delta.content

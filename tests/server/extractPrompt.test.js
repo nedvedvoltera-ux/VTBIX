@@ -45,6 +45,18 @@ describe('buildExtractionPrompts', () => {
     expect(Object.keys(schema.terms)).toHaveLength(18)
   })
 
+  it('для чанка map-reduce помечает номер фрагмента', () => {
+    const { systemPrompt, userPrompt } = buildExtractionPrompts({
+      prompt: PROMPT,
+      markdown: 'часть',
+      chunkIndex: 2,
+      chunkTotal: 5,
+    })
+    expect(systemPrompt).toContain('фрагмент 3 из 5')
+    expect(userPrompt).toContain('Фрагмент Markdown: 3/5')
+    expect(userPrompt).toContain('--- Markdown фрагмент 3/5 ---')
+  })
+
   it('без метрик берёт включённые разделы', () => {
     const { userPrompt } = buildExtractionPrompts({ prompt: {}, markdown: 'md' })
     expect(userPrompt).toContain('"executive": 0')
@@ -92,6 +104,31 @@ describe('applyExtraction', () => {
   it('бюджет чистится от пробелов и запятой', () => {
     expect(applyExtraction(base, { budget: '12 500 000 000' }, PROMPT).budget).toBe(12_500_000_000)
     expect(applyExtraction(base, { budget: '1,5' }, PROMPT).budget).toBe(1.5)
+  })
+
+  it('нулевой бюджет из следующего чанка не затирает найденную сумму', () => {
+    const withBudget = applyExtraction(base, { budget: 154_000_000_000 }, PROMPT)
+    expect(withBudget.budget).toBe(154_000_000_000)
+    const next = applyExtraction(withBudget, { budget: 0, terms: { subject: 'недостаточно данных' } }, PROMPT)
+    expect(next.budget).toBe(154_000_000_000)
+  })
+
+  it('факт бюджета только во втором чанке попадает в карточку', () => {
+    const first = applyExtraction(base, { budget: 0, terms: { subject: 'недостаточно данных' } }, PROMPT)
+    expect(first.budget).toBeUndefined()
+    const second = applyExtraction(first, {
+      budget: 154_000_000_000,
+      terms: { subject: 'недостаточно данных', investmentVolume: 'не более 154 млрд руб.' },
+    }, PROMPT)
+    expect(second.budget).toBe(154_000_000_000)
+    expect(second.note.terms.find((row) => row.id === 'investmentVolume').value).toBe('не более 154 млрд руб.')
+  })
+
+  it('«недостаточно данных» не затирает уже найденное условие КС', () => {
+    const first = applyExtraction(base, { terms: { subject: 'город Москва' } }, PROMPT)
+    const second = applyExtraction(first, { terms: { subject: 'недостаточно данных', object: 'магистраль' } }, PROMPT)
+    expect(second.note.terms.find((row) => row.id === 'subject').value).toBe('город Москва')
+    expect(second.note.terms.find((row) => row.id === 'object').value).toBe('магистраль')
   })
 
   it('отрицательный и нечисловой бюджет отбрасывается', () => {

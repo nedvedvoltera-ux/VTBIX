@@ -6,6 +6,7 @@ import { applyExtraction, buildExtractionPrompts } from './extractPrompt.js'
 import { describeNetworkError, PipelineError } from './httpErrors.js'
 import { extractFromUpload } from './llm.js'
 import { resolveLlmRuntime } from './llmSettings.js'
+import { chunkMarkdown } from './markdownChunks.js'
 import { extractWithQwen } from './qwen.js'
 
 const abortByProject = new Map()
@@ -31,9 +32,20 @@ export function abortPipeline(projectId) {
   runningPipelines.delete(projectId)
 }
 
-function clipMarkdown(markdown) {
-  if (markdown.length <= config.llmMaxDocChars) return markdown
-  return `${markdown.slice(0, config.llmMaxDocChars)}\n\n[... документы обрезаны для модели, ${markdown.length} символов ...]`
+function extractionSnapshot(project) {
+  return {
+    name: project.name,
+    industry: project.industry,
+    country: project.country,
+    region: project.region,
+    budget: project.budget,
+    recommendation: project.recommendation,
+    score: project.score ?? project.concessionScore,
+    note: project.note,
+    terms: project.note?.terms,
+    assessment: project.note?.assessment,
+    riskBalance: project.note?.riskBalance,
+  }
 }
 
 function beginRun(projectId) {
@@ -160,41 +172,91 @@ export async function runExtractDocuments({ project, notes, prompt, signal, onPr
 
     const runtime = resolveLlmRuntime()
     if (runtime.configured) {
-      const { systemPrompt, userPrompt } = buildExtractionPrompts({
-        prompt,
-        notes,
-        markdown: clipMarkdown(markdown),
-        fileName,
+      const chunks = chunkMarkdown(markdown, {
+        chunkChars: config.llmChunkChars,
+        overlap: config.llmChunkOverlap,
       })
       try {
-        const result = await extractWithQwen({
-          systemPrompt,
-          userPrompt,
-          signal: combinedSignal,
-          onPartial: async (extracted) => {
-            await onProgress({
-              stage: 'extracting',
-              progress: Math.min(92, 60 + Math.round(Object.keys(extracted).length * 5)),
-              message: `${runtime.label} читает ${ready.length} документ(а)…`,
-              extracted,
-              markdownPreview: markdown.slice(0, 6000),
-              markdownChars: markdown.length,
-              markdownReady: true,
-            })
-          },
-        })
+        let card = { ...project }
+        let lastRaw = ''
+        for (const chunk of chunks) {
+          const { systemPrompt, userPrompt } = buildExtractionPrompts({
+            prompt,
+            notes,
+            markdown: chunk.text,
+            fileName,
+            chunkIndex: chunk.index,
+            chunkTotal: chunk.total,
+          })
+          const progressBase = 60
+          const progressSpan = 35
+          const chunkProgress = progressBase + Math.round(((chunk.index + 0.15) / chunk.total) * progressSpan)
+          await onProgress({
+            stage: 'extracting',
+            progress: Math.min(94, chunkProgress),
+            message:
+              chunk.total > 1
+                ? `${runtime.label}: фрагмент ${chunk.index + 1}/${chunk.total} (${markdown.length} симв. всего)…`
+                : `${runtime.label} читает ${ready.length} документ(а)…`,
+            markdownPreview: markdown.slice(0, 6000),
+            markdownChars: markdown.length,
+            markdownReady: true,
+          })
+          const result = await extractWithQwen({
+            systemPrompt,
+            userPrompt,
+            signal: combinedSignal,
+            onPartial: async (extracted) => {
+              const live = applyExtraction(card, extracted, prompt)
+              await onProgress({
+                stage: 'extracting',
+                progress: Math.min(
+                  94,
+                  progressBase + Math.round(((chunk.index + 0.5) / chunk.total) * progressSpan),
+                ),
+                message:
+                  chunk.total > 1
+                    ? `${runtime.label}: фрагмент ${chunk.index + 1}/${chunk.total}…`
+                    : `${runtime.label} читает ${ready.length} документ(а)…`,
+                extracted,
+                markdownPreview: markdown.slice(0, 6000),
+                markdownChars: markdown.length,
+                markdownReady: true,
+              })
+              card = live
+            },
+          })
+          card = applyExtraction(card, result.extracted, prompt)
+          lastRaw = result.raw || lastRaw
+          await onProgress({
+            stage: 'extracting',
+            progress: Math.min(95, progressBase + Math.round(((chunk.index + 1) / chunk.total) * progressSpan)),
+            message:
+              chunk.total > 1
+                ? `${runtime.label}: готов фрагмент ${chunk.index + 1}/${chunk.total}`
+                : `${runtime.label} читает ${ready.length} документ(а)…`,
+            extracted: result.extracted,
+            markdownPreview: markdown.slice(0, 6000),
+            markdownChars: markdown.length,
+            markdownReady: true,
+          })
+        }
+        const extracted = extractionSnapshot(card)
         await onProgress({
           stage: 'done',
           progress: 100,
           extract: true,
-          message: `Параметры извлечены из ${ready.length} документ(ов). Проверьте карточку.`,
-          extracted: result.extracted,
+          message:
+            chunks.length > 1
+              ? `Параметры извлечены из ${ready.length} документ(ов), ${chunks.length} фрагментов. Проверьте карточку.`
+              : `Параметры извлечены из ${ready.length} документ(ов). Проверьте карточку.`,
+          extracted,
           markdownPreview: markdown.slice(0, 6000),
           markdownChars: markdown.length,
           markdownReady: true,
-          raw: result.raw,
+          raw: lastRaw,
         })
-        return { markdown, extracted: result.extracted }
+        return { markdown, extracted }
       } catch (error) {
         const endpoint =
           runtime.protocol === 'anthropic' ? `${runtime.apiUrl}/messages` : `${runtime.apiUrl}/chat/completions`

@@ -77,9 +77,18 @@ export function parseSectionScores(raw) {
   return out
 }
 
-export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
+export function isSparseText(value) {
+  const text = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+  return !text || text === 'недостаточно данных' || text === '—' || text === '-' || text === 'н/д'
+}
+
+export function buildExtractionPrompts({ prompt, notes, markdown, fileName, chunkIndex = 0, chunkTotal = 1 }) {
   const metrics = rankingMetrics(prompt)
   const sectionScores = Object.fromEntries(metrics.map((item) => [item.id, 0]))
+  const multiChunk = chunkTotal > 1
 
   const schema = {
     terms: termsSchemaObject(),
@@ -118,10 +127,16 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
     'Верни ТОЛЬКО JSON без markdown-ограждений и без комментариев вне JSON.',
     'Первые ключи верхнего уровня: terms, riskBalance, assessment. Потом name и note.',
     'Все факты только из Markdown ниже. Пустые факты — «недостаточно данных».',
-  ].join('\n')
+    multiChunk
+      ? `Это фрагмент ${chunkIndex + 1} из ${chunkTotal} полного комплекта документов. Заполняй только то, что явно есть в этом фрагменте. Если факта здесь нет — «недостаточно данных» или budget: 0. Не додумывай из других частей. Длинные таблицы могут быть разрезаны: в продолжении снова идут заголовки колонок — опирайся на них, чтобы читать строки.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
 
   const userPrompt = [
     `Файл: ${fileName || 'без имени'}`,
+    multiChunk ? `Фрагмент Markdown: ${chunkIndex + 1}/${chunkTotal}` : '',
     typeof fileName === 'string' && fileName.includes(',')
       ? 'Ниже несколько документов одного проекта. Своди параметры по всем файлам, противоречия помечай в comment.'
       : '',
@@ -130,7 +145,7 @@ export function buildExtractionPrompts({ prompt, notes, markdown, fileName }) {
     'Схема JSON (заполни по документу):',
     JSON.stringify(schema, null, 2),
     '',
-    '--- Markdown документов ---',
+    multiChunk ? `--- Markdown фрагмент ${chunkIndex + 1}/${chunkTotal} ---` : '--- Markdown документов ---',
     markdown,
   ]
     .filter(Boolean)
@@ -183,7 +198,10 @@ export function applyExtraction(project, data, prompt) {
   if (typeof data.region === 'string' && data.region.trim()) next.region = data.region.trim()
   if (data.budget != null && data.budget !== '') {
     const budget = Number(String(data.budget).replace(/\s/g, '').replace(',', '.'))
-    if (Number.isFinite(budget) && budget >= 0) next.budget = budget
+    if (Number.isFinite(budget) && budget > 0) {
+      const current = Number(project.budget)
+      next.budget = Number.isFinite(current) && current > 0 ? Math.max(current, budget) : budget
+    }
   }
   if (data.recommendation === 'invest' || data.recommendation === 'revise' || data.recommendation === 'reject') {
     next.recommendation = data.recommendation
@@ -280,13 +298,19 @@ function mergeTerms(current = [], incoming) {
   return CONCESSION_TERM_ITEMS.map((item, index) => ({
     id: item.id,
     label: item.label,
-    value: incomingRows[index]?.value || currentRows[index]?.value || '',
+    value: keptText(incomingRows[index]?.value, currentRows[index]?.value),
     group: item.group,
   }))
 }
 
+function keptText(incoming, current) {
+  if (!isSparseText(incoming)) return String(incoming).trim()
+  if (!isSparseText(current)) return String(current).trim()
+  return typeof incoming === 'string' && incoming.trim() ? String(incoming).trim() : current || ''
+}
+
 function pickText(value, fallback) {
-  return typeof value === 'string' && value.trim() ? value : fallback || ''
+  return keptText(value, fallback)
 }
 
 function normalizeFinancial(row) {
